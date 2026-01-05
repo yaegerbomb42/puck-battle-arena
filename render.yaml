@@ -1,4 +1,17 @@
 services:
+  # Game Frontend (Static Site)
+  - type: web
+    name: puck-battle-arena-frontend
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./build
+    envVars:
+      - key: REACT_APP_SERVER_URL
+        fromService:
+          name: puck-battle-arena-server
+          type: web
+          property: host
+
   # Game Backend (Socket Server)
   - type: web
     name: puck-battle-arena-server
@@ -13,16 +26,3 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
-
-staticSites:
-  # Game Frontend (Static Site)
-  - name: puck-battle-arena-frontend
-    runtime: static
-    buildCommand: npm install && npm run build
-    publishPath: build
-    envVars:
-      - key: REACT_APP_SERVER_URL
-        fromService:
-          name: puck-battle-arena-server
-          type: web
-          property: host
