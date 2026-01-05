@@ -134,7 +134,7 @@ export function AuthProvider({ children }) {
     }
 
     // Use a free pack
-    async function useFreePack() {
+    async function consumeFreePack() {
         if (inventory.freePacks < 1) return false;
         await saveInventory({ freePacks: inventory.freePacks - 1 });
         return true;
@@ -156,7 +156,7 @@ export function AuthProvider({ children }) {
         logout,
         addIcons,
         addPackCredits,
-        useFreePack,
+        consumeFreePack,
         resetIcons,
         saveInventory
     };
