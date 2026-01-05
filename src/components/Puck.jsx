@@ -165,7 +165,7 @@ export default function Puck({
             window.removeEventListener('keyup', handleKeyUp);
             clearInterval(interval);
         };
-    }, [api, isLocalPlayer, isRespawning, powerup, acceleration]);
+    }, [api, isLocalPlayer, isRespawning, powerup, acceleration, onUseItem]);
 
     useEffect(() => {
         if (!isLocalPlayer && remotePosition) {

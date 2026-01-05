@@ -18,6 +18,8 @@ import { PHYSICS_CONFIG, MATERIALS, getRandomPowerupPosition, getRandomPowerupTy
 
 import { getPowerupInfo, POWERUP_REGISTRY } from '../utils/powerups';
 
+const DEFAULT_LOADOUT = ['speed_boost', 'rocket', 'shield'];
+
 const POWERUP_TYPES = {
     SPEED: { color: '#00ff00', texture: '/textures/speed.png', label: '⚡' },
     SHIELD: { color: '#0099ff', texture: '/textures/shield.png', label: '🛡️' },
@@ -383,7 +385,6 @@ export default function BattleArena() {
                                 />
                                 <ProjectileSystem projectiles={projectiles} onProjectileHit={handleProjectileHit} />
                             </>
-                        )}
                         )}
 
                         {/* Show arena preview in lobby */}

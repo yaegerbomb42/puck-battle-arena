@@ -1,6 +1,7 @@
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useBox, useCylinder } from '@react-three/cannon';
+import * as THREE from 'three';
 import { PHYSICS_CONFIG } from '../utils/physics';
 
 // Floor Material (Normal friction)
@@ -131,8 +132,6 @@ function SafetyWall({ position, size, rotation }) {
         </mesh>
     );
 }
-
-import * as THREE from 'three';
 
 // Main Arena Component
 export default function ArenaChaos({ mapType = 'SAWBLADE CITY' }) {
