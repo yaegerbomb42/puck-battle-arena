@@ -1,18 +1,16 @@
-// Firebase Configuration
-// Replace these values with your Firebase project config from the Firebase Console
-// Go to: Firebase Console > Project Settings > General > Your Apps > Config
-
+// Firebase Configuration for Puck Battle Arena
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+// Your Firebase project config
 const firebaseConfig = {
-    apiKey: process.env.REACT_APP_FIREBASE_API_KEY || "YOUR_API_KEY",
-    authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT.firebaseapp.com",
-    projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID || "YOUR_PROJECT_ID",
-    storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET || "YOUR_PROJECT.appspot.com",
-    messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID || "YOUR_SENDER_ID",
-    appId: process.env.REACT_APP_FIREBASE_APP_ID || "YOUR_APP_ID"
+    apiKey: "AIzaSyAJKOZrYrRxuny9SKPSSaUGrJ4zqGDowYE",
+    authDomain: "puck-70921.firebaseapp.com",
+    projectId: "puck-70921",
+    storageBucket: "puck-70921.firebasestorage.app",
+    messagingSenderId: "1035604930002",
+    appId: "1:1035604930002:web:bcb5c91284edabcdd32c0b"
 };
 
 // Initialize Firebase
@@ -22,7 +20,7 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
-// Firestore Database
+// Firestore Database - This IS your database for user purchases, icons, etc.
 export const db = getFirestore(app);
 
 export default app;

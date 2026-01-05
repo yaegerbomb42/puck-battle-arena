@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAuth } from '../../contexts/AuthContext';
 import { TIERS, PACK_PRICES, TOTAL_ICONS, getCollectionStats } from '../../utils/economy';
 
 // Stripe Payment Links (Replace with your real URLs)
@@ -8,13 +9,33 @@ const STRIPE_LINKS = {
     unlockAll: 'https://buy.stripe.com/6oU4grcrPgg29gx0m1aIM08'
 };
 
-export default function Store({ onClose, onOpenPack, playerInventory = [] }) {
-    const stats = getCollectionStats(playerInventory);
+export default function Store({ onClose, onOpenPack }) {
+    const { inventory, useFreePack } = useAuth();
+    const stats = getCollectionStats(inventory?.icons || []);
+
+    const handleOpenFreePack = async (type) => {
+        if (inventory.freePacks > 0) {
+            const success = await useFreePack();
+            if (success) {
+                onOpenPack(type);
+            }
+        } else {
+            // Redirect to purchase if no free packs
+            /* Logic for direct purchase is below */
+        }
+    };
 
     return (
         <div className="store-overlay">
             <div className="store-header">
-                <h2>🎰 ICON VAULT</h2>
+                <div className="header-info">
+                    <h2>🎰 ICON VAULT</h2>
+                    {inventory?.freePacks > 0 && (
+                        <div className="free-packs-badge">
+                            🎁 {inventory.freePacks} Packs Owned
+                        </div>
+                    )}
+                </div>
                 <div className="collection-progress">
                     📦 {stats.owned}/{stats.total} ({stats.percentage}%)
                 </div>
@@ -30,11 +51,18 @@ export default function Store({ onClose, onOpenPack, playerInventory = [] }) {
                     <div className="packs-grid">
                         <PackCard
                             name="Single Pack"
-                            price="$0.50"
+                            price={inventory?.freePacks > 0 ? "OPEN NOW" : "$0.50"}
                             slots={3}
                             color="#00d4ff"
                             image="/images/packs/single_pack.png"
-                            onClick={() => window.open(STRIPE_LINKS.single, '_blank')}
+                            owned={inventory?.freePacks > 0}
+                            onClick={() => {
+                                if (inventory?.freePacks > 0) {
+                                    handleOpenFreePack('single');
+                                } else {
+                                    window.open(STRIPE_LINKS.single, '_blank');
+                                }
+                            }}
                         />
                         <PackCard
                             name="10-Pack Bundle"
