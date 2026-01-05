@@ -64,6 +64,8 @@ export default function Puck({
     onPositionUpdate,
     onCollision,
     onUseItem, // New prop
+    onImpact, // New prop for hitstop
+    isPaused, // New prop for hitstop
     remotePosition,
     remoteVelocity,
 }) {
@@ -101,10 +103,20 @@ export default function Puck({
                     );
 
                     onCollision?.(impactVelocity);
+
+                    // Trigger hitstop/impact frames on heavy hits
+                    if (impactVelocity > 5) {
+                        onImpact?.(impactVelocity);
+                        setIsFlashing(true);
+                        setTimeout(() => setIsFlashing(false), 50); // Hard flash
+                    }
                 }
             }
         },
     }));
+
+    const [isFlashing, setIsFlashing] = useState(false);
+
 
     const velocity = useRef([0, 0, 0]);
     const position = useRef([...startPosition]);
@@ -127,7 +139,7 @@ export default function Puck({
         window.addEventListener('keyup', handleKeyUp);
 
         const updateMovement = () => {
-            if (isRespawning) return;
+            if (isRespawning || isPaused) return;
 
             let forceX = 0;
             let forceZ = 0;
@@ -165,7 +177,8 @@ export default function Puck({
             window.removeEventListener('keyup', handleKeyUp);
             clearInterval(interval);
         };
-    }, [api, isLocalPlayer, isRespawning, powerup, acceleration, onUseItem]);
+    }, [api, isLocalPlayer, isRespawning, isPaused, powerup, acceleration, onUseItem]);
+
 
     useEffect(() => {
         if (!isLocalPlayer && remotePosition) {
@@ -177,7 +190,7 @@ export default function Puck({
     }, [api, isLocalPlayer, remotePosition, remoteVelocity]);
 
     useFrame(() => {
-        if (!isLocalPlayer) return;
+        if (!isLocalPlayer || isPaused) return;
         onPositionUpdate?.(position.current, velocity.current);
 
         if (!isRespawning && isInKnockoutZone(position.current)) {
@@ -205,11 +218,11 @@ export default function Puck({
             <mesh ref={ref} castShadow visible={!isRespawning}>
                 <sphereGeometry args={[radius, 32, 32]} />
                 <meshStandardMaterial
-                    color={color}
+                    color={isFlashing ? '#ffffff' : color}
                     metalness={0.6}
                     roughness={0.2}
-                    emissive={color}
-                    emissiveIntensity={0.2}
+                    emissive={isFlashing ? '#ffffff' : color}
+                    emissiveIntensity={isFlashing ? 10 : 0.2}
                 />
             </mesh>
 

@@ -17,7 +17,7 @@ export default function GameHUD({ scores, timer, activePowerup, loadout, damageS
                     <div className="player-label p1-label">PLAYER 1</div>
                     <div className="score-value">{scores.player1}</div>
                     {damageStats?.player1 !== undefined && (
-                        <div className="damage-value" style={{ color: damageStats.player1 > 100 ? '#ff0000' : '#fff' }}>
+                        <div className={`damage-value ${damageStats.player1 > 100 ? 'critical-pulse' : ''}`} style={{ color: damageStats.player1 > 100 ? '#ff0000' : (damageStats.player1 > 50 ? '#ffff00' : '#fff') }}>
                             {Math.floor(damageStats.player1)}%
                         </div>
                     )}
@@ -31,7 +31,7 @@ export default function GameHUD({ scores, timer, activePowerup, loadout, damageS
                     <div className="score-value">{scores.player2}</div>
                     <div className="player-label p2-label">PLAYER 2</div>
                     {damageStats?.player2 !== undefined && (
-                        <div className="damage-value" style={{ color: damageStats.player2 > 100 ? '#ff0000' : '#fff' }}>
+                        <div className={`damage-value ${damageStats.player2 > 100 ? 'critical-pulse' : ''}`} style={{ color: damageStats.player2 > 100 ? '#ff0000' : (damageStats.player2 > 50 ? '#ffff00' : '#fff') }}>
                             {Math.floor(damageStats.player2)}%
                         </div>
                     )}
@@ -91,6 +91,28 @@ export default function GameHUD({ scores, timer, activePowerup, loadout, damageS
                     animation: pulse 1s infinite;
                 }
                 @keyframes pulse { 0% { opacity: 0.8; } 50% { opacity: 1; transform: scale(1.05); } 100% { opacity: 0.8; } }
+                
+                .critical-pulse {
+                    animation: critical-shake 0.1s infinite;
+                    text-shadow: 0 0 20px rgba(255, 0, 0, 0.8);
+                    font-weight: 900;
+                    display: inline-block;
+                }
+                
+                @keyframes critical-shake {
+                    0% { transform: translate(1px, 1px) rotate(0deg) scale(1.2); }
+                    25% { transform: translate(-1px, -2px) rotate(-1deg) scale(1.25); }
+                    50% { transform: translate(-3px, 0px) rotate(1deg) scale(1.2); }
+                    75% { transform: translate(3px, 2px) rotate(0deg) scale(1.25); }
+                    100% { transform: translate(1px, -1px) rotate(-1deg) scale(1.2); }
+                }
+                
+                .damage-value {
+                    transition: all 0.2s;
+                    font-family: 'Orbitron', sans-serif;
+                    font-weight: bold;
+                    font-size: 1.5rem;
+                }
             `}</style>
         </div>
     );

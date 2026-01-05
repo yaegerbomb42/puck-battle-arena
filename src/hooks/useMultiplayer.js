@@ -93,6 +93,12 @@ export function useMultiplayer() {
             handlersRef.current.onPowerupRejected?.(powerupId);
         });
 
+        // Reward earned from server (packs/credits)
+        newSocket.on('rewardEarned', ({ packs, credits, isWinner }) => {
+            console.log(`🎉 Reward earned: ${packs} packs, ${credits} credits${isWinner ? ' (winner)' : ''}`);
+            handlersRef.current.onRewardEarned?.({ packs, credits, isWinner });
+        });
+
         return () => {
             newSocket.disconnect();
         };

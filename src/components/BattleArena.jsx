@@ -36,15 +36,18 @@ function GameScene({
     powerups,
     playerPositions,
     playerPowerups,
-    playerDamage, // New prop
+    playerDamage,
     onKnockout,
     onCollectPowerup,
     onPositionUpdate,
-    onCollision, // New prop
     onUseItem,
     effects,
     onEffectComplete,
-    mapType // New prop
+    mapType,
+    onCollision,
+    onImpact,
+    isPaused,
+    screenShake
 }) {
     return (
         <>
@@ -54,7 +57,7 @@ function GameScene({
             <fog attach="fog" args={['#0a0a1a', 25, 70]} />
 
             {/* Dynamic camera */}
-            <DynamicCamera playerPositions={playerPositions} />
+            <DynamicCamera playerPositions={playerPositions} shake={screenShake} />
 
             {/* Chaos Arena */}
             <ArenaChaos mapType={mapType} />
@@ -73,6 +76,8 @@ function GameScene({
                     onPositionUpdate={player.id === localPlayerId ? onPositionUpdate : undefined}
                     onCollision={player.id === localPlayerId ? onCollision : undefined} // Pass collision handler
                     onUseItem={player.id === localPlayerId ? onUseItem : undefined} // Pass use handler
+                    onImpact={player.id === localPlayerId ? onImpact : undefined}
+                    isPaused={isPaused}
                     remotePosition={player.id !== localPlayerId ? player.position : undefined}
                     remoteVelocity={player.id !== localPlayerId ? player.velocity : undefined}
                 />
@@ -108,6 +113,8 @@ export default function BattleArena() {
     const [playerDamage, setPlayerDamage] = useState({}); // New state: Damage %
     const [knockoutMessage, setKnockoutMessage] = useState(null);
     const [effects, setEffects] = useState([]);
+    const [isPaused, setIsPaused] = useState(false);
+    const [screenShake, setScreenShake] = useState(0);
     const nextEffectId = useRef(0);
     const nextPowerupId = useRef(0);
 
@@ -147,6 +154,28 @@ export default function BattleArena() {
             setPlayerPowerups(prev => ({ ...prev, [playerId]: null }));
         }
     }, [playerPowerups, playerPositions]);
+
+    // Handle Impact (Hitstop + Screen Shake)
+    const handleImpact = useCallback((intensity) => {
+        setIsPaused(true);
+        setScreenShake(Math.min(intensity * 0.05, 0.5));
+
+        // Brief freeze
+        setTimeout(() => {
+            setIsPaused(false);
+        }, 50 + Math.min(intensity * 5, 100));
+
+        // Decay screen shake
+        const decayInterval = setInterval(() => {
+            setScreenShake(prev => {
+                if (prev <= 0.01) {
+                    clearInterval(decayInterval);
+                    return 0;
+                }
+                return prev * 0.8;
+            });
+        }, 16);
+    }, []);
 
     // Projectile Hit Handler
     const handleProjectileHit = (projId, targetId) => {
@@ -383,9 +412,23 @@ export default function BattleArena() {
                         {multiplayer.gameState === 'playing' && (
                             <>
                                 <GameScene
-                                    // ... props
+                                    players={multiplayer.players}
+                                    localPlayerId={multiplayer.playerId}
+                                    powerups={powerups}
+                                    playerPositions={playerPositions}
+                                    playerPowerups={playerPowerups}
+                                    playerDamage={playerDamage}
+                                    onKnockout={handleKnockout}
+                                    onCollectPowerup={handleCollectPowerup}
+                                    onPositionUpdate={handlePositionUpdate}
+                                    onCollision={handleCollision}
                                     onUseItem={() => handleUseItem(multiplayer.playerId)}
+                                    effects={effects}
+                                    onEffectComplete={handleEffectComplete}
                                     mapType={multiplayer.selectedMap}
+                                    onImpact={handleImpact}
+                                    isPaused={isPaused}
+                                    screenShake={screenShake}
                                 />
                                 <ProjectileSystem projectiles={projectiles} onProjectileHit={handleProjectileHit} />
                             </>

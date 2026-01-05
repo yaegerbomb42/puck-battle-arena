@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 // Smoother camera following logic
-function DynamicCamera({ playerPositions, targetId }) {
+function DynamicCamera({ playerPositions, targetId, shake = 0 }) {
     const { camera } = useThree();
 
     // Camera target state
@@ -51,6 +51,12 @@ function DynamicCamera({ playerPositions, targetId }) {
         const smoothFactor = 2.0 * delta;
 
         camera.position.lerp(targetPos.current, smoothFactor);
+
+        if (shake > 0) {
+            camera.position.x += (Math.random() - 0.5) * shake;
+            camera.position.y += (Math.random() - 0.5) * shake;
+            camera.position.z += (Math.random() - 0.5) * shake;
+        }
 
         // Smooth lookAt requires a dummy vector or manual quaternion slerp
         // For simplicity with OrbitControls-like behavior:
