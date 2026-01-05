@@ -15,6 +15,7 @@ services:
   # Game Backend (Socket Server)
   - type: web
     name: puck-battle-arena-server
+    rootDir: server
     runtime: node
     buildCommand: npm install
     startCommand: node index.js
