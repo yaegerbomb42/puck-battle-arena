@@ -19,26 +19,35 @@ export function useMultiplayer() {
     const [scores, setScores] = useState({});
     const [serverPowerups, setServerPowerups] = useState([]);
     const [winner, setWinner] = useState(null);
-    const [selectedMap, setSelectedMap] = useState('SAWBLADE CITY');
-    const [seed, setSeed] = useState(null); // New state for procedural generation
+    const [selectedMap, setSelectedMap] = useState('PROCEDURAL');
+    const [selectedMode, setSelectedMode] = useState('knockout');
+    const [seed, setSeed] = useState(null);
+    const [mapVotes, setMapVotes] = useState({});
 
-    // Event handlers ref to avoid stale closures
+    // Event handlers ref
     const handlersRef = useRef({});
 
     // Connect to server
     useEffect(() => {
         const newSocket = io(SERVER_URL, {
             transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000
         });
 
         newSocket.on('connect', () => {
-            console.log('Connected to server');
+            console.log('✅ Connected to server');
             setConnected(true);
             setSocket(newSocket);
         });
 
+        newSocket.on('connect_error', (err) => {
+            console.warn('⚠️ Connection error:', err.message);
+        });
+
         newSocket.on('disconnect', () => {
-            console.log('Disconnected from server');
+            console.log('❌ Disconnected from server');
             setConnected(false);
             setGameState('disconnected');
         });
@@ -48,23 +57,29 @@ export function useMultiplayer() {
         });
 
         newSocket.on('playerJoined', (player) => {
-            console.log('Player joined:', player.id);
+            console.log('👤 Player joined:', player.name || player.id);
         });
 
         newSocket.on('playerLeft', ({ playerId }) => {
-            console.log('Player left:', playerId);
+            console.log('👤 Player left:', playerId);
         });
 
-        newSocket.on('gameStart', ({ players, selectedMap, seed }) => {
+        newSocket.on('gameStart', ({ players, selectedMap, seed, mode }) => {
             setGameState('playing');
             if (players) setPlayers(players);
             if (selectedMap) setSelectedMap(selectedMap);
-            if (seed) setSeed(seed); // New seed state
+            if (seed) setSeed(seed);
+            if (mode) setSelectedMode(mode);
             setScores({});
         });
 
-        newSocket.on('mapVoted', ({ mapName }) => {
+        newSocket.on('mapVoted', ({ mapName, votes }) => {
             setSelectedMap(mapName);
+            if (votes) setMapVotes(votes);
+        });
+
+        newSocket.on('modeSelected', ({ mode }) => {
+            setSelectedMode(mode);
         });
 
         newSocket.on('playerMoved', (data) => {
@@ -76,10 +91,12 @@ export function useMultiplayer() {
             handlersRef.current.onKnockout?.(scorerId, knockedOutId);
         });
 
-        newSocket.on('gameOver', ({ winnerId, scores: finalScores }) => {
-            setScores(finalScores);
-            setWinner(winnerId);
-            setGameState('ended');
+        newSocket.on('stomp', ({ attackerId, targetId, damage }) => {
+            handlersRef.current.onStomp?.(attackerId, targetId, damage);
+        });
+
+        newSocket.on('damageUpdate', ({ playerId, damage }) => {
+            handlersRef.current.onDamageUpdate?.(playerId, damage);
         });
 
         newSocket.on('powerupSpawned', (powerup) => {
@@ -90,14 +107,28 @@ export function useMultiplayer() {
             setServerPowerups(prev => prev.filter(p => p.id !== powerupId));
         });
 
+        newSocket.on('powerupCollected', ({ powerupId, playerId }) => {
+            setServerPowerups(prev => prev.filter(p => p.id !== powerupId));
+            handlersRef.current.onPowerupCollected?.(powerupId, playerId);
+        });
+
+        newSocket.on('powerupUsed', ({ playerId, powerupId, position }) => {
+            handlersRef.current.onPowerupUsed?.(playerId, powerupId, position);
+        });
+
         newSocket.on('powerupRejected', ({ powerupId }) => {
-            console.log(`⚠️ Powerup ${powerupId} collection rejected (already taken)`);
             handlersRef.current.onPowerupRejected?.(powerupId);
         });
 
-        // Reward earned from server (packs/credits)
+        newSocket.on('gameOver', ({ winnerId, scores: finalScores, stats }) => {
+            setScores(finalScores);
+            setWinner(winnerId);
+            setGameState('ended');
+            handlersRef.current.onGameOver?.(winnerId, finalScores, stats);
+        });
+
         newSocket.on('rewardEarned', ({ packs, credits, isWinner }) => {
-            console.log(`🎉 Reward earned: ${packs} packs, ${credits} credits${isWinner ? ' (winner)' : ''}`);
+            console.log(`🎉 Reward: ${packs} packs, ${credits} credits`);
             handlersRef.current.onRewardEarned?.({ packs, credits, isWinner });
         });
 
@@ -106,10 +137,10 @@ export function useMultiplayer() {
         };
     }, []);
 
-    // Create room
+    // ========== ROOM ACTIONS ==========
+    
     const createRoom = useCallback((playerName, userEmail) => {
         if (!socket) return;
-
         socket.emit('createRoom', { playerName, userEmail }, (response) => {
             if (response.success) {
                 setRoomCode(response.roomCode);
@@ -122,10 +153,8 @@ export function useMultiplayer() {
         });
     }, [socket]);
 
-    // Join room
     const joinRoom = useCallback((code, playerName, userEmail) => {
         if (!socket) return Promise.reject('Not connected');
-
         return new Promise((resolve, reject) => {
             socket.emit('joinRoom', { roomCode: code, playerName, userEmail }, (response) => {
                 if (response.success) {
@@ -143,10 +172,8 @@ export function useMultiplayer() {
         });
     }, [socket]);
 
-    // Quick join
     const quickJoin = useCallback((playerName, userEmail) => {
         if (!socket) return;
-
         socket.emit('quickJoin', { playerName, userEmail }, (response) => {
             if (response.success) {
                 setRoomCode(response.roomCode);
@@ -159,42 +186,11 @@ export function useMultiplayer() {
         });
     }, [socket]);
 
-    // Set ready state
     const setReady = useCallback((ready) => {
         if (!socket) return;
         socket.emit('playerReady', { ready });
     }, [socket]);
 
-    // Send position update
-    const sendPosition = useCallback((position, velocity, rotation) => {
-        if (!socket || gameState !== 'playing') return;
-        socket.emit('playerPosition', { position, velocity, rotation });
-    }, [socket, gameState]);
-
-    // Report knockout
-    const reportKnockout = useCallback((knockedOutId) => {
-        if (!socket) return;
-        socket.emit('playerKnockout', { knockedOutId });
-    }, [socket]);
-
-    // Report damage
-    const reportDamage = useCallback((damage) => {
-        if (!socket) return;
-        socket.emit('playerDamage', { damage });
-    }, [socket]);
-
-    // Collect powerup
-    const collectPowerup = useCallback((powerupId) => {
-        if (!socket) return;
-        socket.emit('powerupCollected', { powerupId });
-    }, [socket]);
-
-    // Register event handlers
-    const registerHandlers = useCallback((handlers) => {
-        handlersRef.current = handlers;
-    }, []);
-
-    // Leave and reset
     const leaveRoom = useCallback(() => {
         if (socket) {
             socket.disconnect();
@@ -206,7 +202,73 @@ export function useMultiplayer() {
         setScores({});
         setWinner(null);
         setServerPowerups([]);
+        setSeed(null);
     }, [socket]);
+
+    // ========== GAME SETUP ACTIONS ==========
+
+    const voteMap = useCallback((mapId) => {
+        if (!socket) return;
+        socket.emit('voteMap', { mapId });
+    }, [socket]);
+
+    const selectMode = useCallback((mode) => {
+        if (!socket) return;
+        setSelectedMode(mode);
+        socket.emit('selectMode', { mode });
+    }, [socket]);
+
+    // ========== GAMEPLAY ACTIONS ==========
+
+    const sendPosition = useCallback((position, velocity, rotation) => {
+        if (!socket || gameState !== 'playing') return;
+        socket.emit('playerPosition', { position, velocity, rotation });
+    }, [socket, gameState]);
+
+    const reportKnockout = useCallback((knockedOutId) => {
+        if (!socket) return;
+        socket.emit('playerKnockout', { knockedOutId });
+    }, [socket]);
+
+    const reportStomp = useCallback((targetId, damage) => {
+        if (!socket) return;
+        socket.emit('reportStomp', { targetId, damage });
+    }, [socket]);
+
+    const reportDamage = useCallback((damage) => {
+        if (!socket) return;
+        socket.emit('playerDamage', { damage });
+    }, [socket]);
+
+    const collectPowerup = useCallback((powerupId) => {
+        if (!socket) return;
+        socket.emit('powerupCollected', { powerupId });
+    }, [socket]);
+
+    const usePowerup = useCallback((powerupId, targetPosition) => {
+        if (!socket) return;
+        socket.emit('usePowerup', { powerupId, targetPosition });
+    }, [socket]);
+
+    const reportGameEnd = useCallback((winnerId, finalScores, stats) => {
+        if (!socket) return;
+        socket.emit('reportGameEnd', { winnerId, scores: finalScores, stats });
+    }, [socket]);
+
+    const requestRematch = useCallback(() => {
+        if (!socket) return;
+        socket.emit('requestRematch');
+        // Reset local state for new game
+        setScores({});
+        setWinner(null);
+        setGameState('lobby');
+    }, [socket]);
+
+    // ========== HANDLER REGISTRATION ==========
+
+    const registerHandlers = useCallback((handlers) => {
+        handlersRef.current = handlers;
+    }, []);
 
     return {
         // Connection state
@@ -223,17 +285,33 @@ export function useMultiplayer() {
         scores,
         serverPowerups,
         winner,
-        selectedMap, // Return map
+        selectedMap,
+        selectedMode,
+        seed,
+        mapVotes,
 
-        // Actions
+        // Room actions
         createRoom,
         joinRoom,
         quickJoin,
         setReady,
+        leaveRoom,
+
+        // Setup actions
+        voteMap,
+        selectMode,
+
+        // Gameplay actions
         sendPosition,
         reportKnockout,
+        reportStomp,
+        reportDamage,
         collectPowerup,
-        registerHandlers,
-        leaveRoom,
+        usePowerup,
+        reportGameEnd,
+        requestRematch,
+
+        // Handlers
+        registerHandlers
     };
 }

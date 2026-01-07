@@ -1,5 +1,5 @@
 import React, { useState, useCallback, Suspense, useRef, useEffect, useMemo } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas } from '@react-three/fiber';
 import { Physics } from '@react-three/cannon';
 import { Stars, Environment } from '@react-three/drei';
 
@@ -13,25 +13,62 @@ import Lobby from './UI/Lobby';
 import DynamicCamera from './DynamicCamera';
 import LoadingScreen from './UI/LoadingScreen';
 import ProjectileSystem from './ProjectileSystem';
-import { useMultiplayer } from '../hooks/useMultiplayer';
-import { PHYSICS_CONFIG, MATERIALS, getRandomPowerupPosition, getRandomPowerupType, getSpawnPosition } from '../utils/physics';
-
-import { getPowerupInfo, POWERUP_REGISTRY } from '../utils/powerups';
 import ProceduralArena from './ProceduralArena';
+import { useMultiplayer } from '../hooks/useMultiplayer';
+import { useAuth } from '../contexts/AuthContext';
+import { 
+    PHYSICS_CONFIG, 
+    getRandomPowerupPosition, 
+    getRandomPowerupType, 
+    getSpawnPosition,
+    calculateStompDamage
+} from '../utils/physics';
+import { getPowerupInfo, DEFAULT_LOADOUT } from '../utils/powerups';
 import { generateMap } from '../utils/mapGenerator';
 
-const DEFAULT_LOADOUT = ['speed_boost', 'rocket', 'shield'];
-
-const POWERUP_TYPES = {
-    SPEED: { color: '#00ff00', texture: '/textures/speed.png', label: '⚡' },
-    SHIELD: { color: '#0099ff', texture: '/textures/shield.png', label: '🛡️' },
-    GROW: { color: '#ff0000', texture: '/textures/grow.png', label: '🍄' },
+// ============================================
+// GAME MODE CONFIGURATIONS
+// ============================================
+const GAME_MODES = {
+    knockout: {
+        name: 'Knockout',
+        description: 'Knock enemies off to score. First to 3 KOs wins.',
+        stocksPerPlayer: 3,
+        timeLimit: 180,
+        winCondition: 'stocks',
+        damageDecay: false,
+        scoreToWin: 3
+    },
+    survival: {
+        name: 'Survival',
+        description: 'Last puck standing wins!',
+        stocksPerPlayer: 1,
+        timeLimit: 0,
+        winCondition: 'lastStanding',
+        damageDecay: false
+    },
+    timed: {
+        name: 'Timed Match',
+        description: 'Most KOs when time runs out wins.',
+        stocksPerPlayer: Infinity,
+        timeLimit: 120,
+        winCondition: 'score',
+        damageDecay: true
+    },
+    chaos: {
+        name: 'Chaos Mode',
+        description: 'Maximum powerups, maximum mayhem!',
+        stocksPerPlayer: 5,
+        timeLimit: 180,
+        winCondition: 'stocks',
+        damageDecay: false,
+        powerupSpawnRate: 0.5
+    }
 };
 
-// Loading fallback
-
-
-// Game scene with multiplayer
+// ============================================
+// GAME SCENE COMPONENT
+// ============================================
 function GameScene({
     players,
     localPlayerId,
@@ -40,62 +77,73 @@ function GameScene({
     playerPowerups,
     playerDamage,
     onKnockout,
+    onStomp,
     onCollectPowerup,
     onPositionUpdate,
     onUseItem,
     effects,
     onEffectComplete,
+    mapData,
     mapType,
     onCollision,
     onImpact,
     isPaused,
     screenShake,
-    seed // New prop
+    knockoutTarget,
+    slowmo,
+    gameMode
 }) {
-    // Generate map if procedural
-    const proceduralMapData = useMemo(() => {
-        if (mapType === 'PROCEDURAL' && seed) {
-            return generateMap(seed);
-        }
-        return null;
-    }, [mapType, seed]);
-
     return (
         <>
-            {/* Environment - Solar Punk Day */}
-            <Environment preset="sunset" />
-            <ambientLight intensity={0.7} />
-            <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
-            <fog attach="fog" args={['#d6e4ff', 20, 90]} />
+            {/* Environment */}
+            <Environment preset={mapData?.biome?.skybox || 'sunset'} />
+            <ambientLight intensity={0.6} />
+            <directionalLight 
+                position={[10, 20, 10]} 
+                intensity={1.3} 
+                castShadow
+                shadow-mapSize={[2048, 2048]}
+            />
+            <fog attach="fog" args={[mapData?.biome?.fog?.color || '#d6e4ff', 20, 80]} />
 
-            {/* Dynamic camera */}
-            <DynamicCamera playerPositions={playerPositions} shake={screenShake} />
+            {/* Dynamic Camera */}
+            <DynamicCamera 
+                playerPositions={playerPositions} 
+                localPlayerId={localPlayerId}
+                shake={screenShake}
+                knockoutTarget={knockoutTarget}
+                slowmo={slowmo}
+            />
 
             {/* Arena */}
-            {mapType === 'PROCEDURAL' ? (
-                <ProceduralArena mapData={proceduralMapData} />
+            {mapData ? (
+                <ProceduralArena mapData={mapData} />
             ) : (
                 <ArenaChaos mapType={mapType} />
             )}
 
-            {/* All players */}
+            {/* Players */}
             {players.map((player, index) => (
                 <Puck
                     key={player.id}
                     playerId={player.id}
+                    playerName={player.name}
                     color={player.color}
-                    startPosition={getSpawnPosition(index)}
+                    startPosition={getSpawnPosition(index, mapData)}
                     isLocalPlayer={player.id === localPlayerId}
                     powerup={playerPowerups[player.id]}
-                    damage={playerDamage[player.id] || 0} // Pass damage
+                    damage={playerDamage[player.id] || 0}
                     onKnockout={onKnockout}
+                    onStomp={onStomp}
                     onPositionUpdate={player.id === localPlayerId ? onPositionUpdate : undefined}
-                    onCollision={player.id === localPlayerId ? onCollision : undefined} // Pass collision handler
-                    onUseItem={player.id === localPlayerId ? onUseItem : undefined} // Pass use handler
+                    onCollision={player.id === localPlayerId ? onCollision : undefined}
+                    onUseItem={player.id === localPlayerId ? onUseItem : undefined}
                     onImpact={player.id === localPlayerId ? onImpact : undefined}
                     isPaused={isPaused}
                     remotePosition={player.id !== localPlayerId ? player.position : undefined}
                     remoteVelocity={player.id !== localPlayerId ? player.velocity : undefined}
+                    allPlayerPositions={playerPositions}
+                    gameMode={gameMode}
                 />
             ))}
 
@@ -106,7 +154,7 @@ function GameScene({
                 onCollect={onCollectPowerup}
             />
 
-            {/* Knockout effects */}
+            {/* Effects */}
             <KnockoutEffects effects={effects} onEffectComplete={onEffectComplete} />
 
             {/* Post-processing */}
@@ -115,278 +163,481 @@ function GameScene({
     );
 }
 
-// Main BattleArena component
+// ============================================
+// MAIN BATTLE ARENA COMPONENT
+// ============================================
 export default function BattleArena() {
     const multiplayer = useMultiplayer();
+    const { user, inventory, updateMatchStats } = useAuth() || {};
 
-    // Local game state
+    // ========== GAME STATE ==========
+    const [gameMode, setGameMode] = useState('knockout');
+    const [mapSeed, setMapSeed] = useState(null);
     const [localPowerups, setLocalPowerups] = useState([]);
     const [playerPositions, setPlayerPositions] = useState({});
     const [playerPowerups, setPlayerPowerups] = useState({});
-    const [players, setPlayers] = useState([]);
+    const [playerDamage, setPlayerDamage] = useState({});
+    const [playerStocks, setPlayerStocks] = useState({});
+    const [playerScores, setPlayerScores] = useState({});
     const [projectiles, setProjectiles] = useState([]);
     const [playerLoadouts, setPlayerLoadouts] = useState({});
-    const [playerDamage, setPlayerDamage] = useState({}); // New state: Damage %
-    const [knockoutMessage, setKnockoutMessage] = useState(null);
     const [effects, setEffects] = useState([]);
+    const [knockoutMessage, setKnockoutMessage] = useState(null);
+    const [knockoutTarget, setKnockoutTarget] = useState(null);
+    
+    // Visual effects
     const [isPaused, setIsPaused] = useState(false);
     const [screenShake, setScreenShake] = useState(0);
-    const nextEffectId = useRef(0);
-    const nextPowerupId = useRef(0);
+    const [slowmo, setSlowmo] = useState(false);
+    
+    // Timer - FIX: Actually counts down now
+    const [gameTimer, setGameTimer] = useState(180);
+    const timerRef = useRef(null);
+    
+    // Stats tracking
+    const [matchStats, setMatchStats] = useState({
+        totalDamage: 0,
+        maxCombo: 0,
+        stomps: 0,
+        knockouts: 0
+    });
+    const [combo, setCombo] = useState(0);
+    const lastHitTime = useRef(0);
+    
+    // Effect ID counter - FIX: Single atomic counter
+    const nextIdRef = useRef(0);
+    const getNextId = useCallback(() => nextIdRef.current++, []);
 
-    // Handle "Use Item" (Spacebar)
-    const handleUseItem = useCallback((playerId) => {
-        const activePowerup = playerPowerups[playerId];
+    // ========== GENERATE MAP ==========
+    const mapData = useMemo(() => {
+        if (mapSeed) {
+            const chaosLevel = gameMode === 'chaos' ? 0.8 : 0.5;
+            return generateMap(mapSeed, 14, chaosLevel);
+        }
+        return null;
+    }, [mapSeed, gameMode]);
+
+    const modeConfig = GAME_MODES[gameMode] || GAME_MODES.knockout;
+
+    // ========== GAME INITIALIZATION ==========
+    useEffect(() => {
+        if (multiplayer.gameState === 'playing') {
+            // Initialize player states
+            const initialStocks = {};
+            const initialScores = {};
+            multiplayer.players.forEach(p => {
+                initialStocks[p.id] = modeConfig.stocksPerPlayer;
+                initialScores[p.id] = 0;
+            });
+            setPlayerStocks(initialStocks);
+            setPlayerScores(initialScores);
+            setPlayerDamage({});
+            setGameTimer(modeConfig.timeLimit || 180);
+            setMatchStats({ totalDamage: 0, maxCombo: 0, stomps: 0, knockouts: 0 });
+            setCombo(0);
+            
+            // Set map seed
+            setMapSeed(multiplayer.seed || Math.floor(Math.random() * 1000000));
+            
+            // Start timer - FIX: Actually decrements
+            if (modeConfig.timeLimit > 0) {
+                timerRef.current = setInterval(() => {
+                    setGameTimer(prev => {
+                        if (prev <= 1) {
+                            clearInterval(timerRef.current);
+                            // Time's up - trigger game end
+                            checkWinCondition(true);
+                            return 0;
+                        }
+                        return prev - 1;
+                    });
+                }, 1000);
+            }
+        }
+        
+        return () => {
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
+        };
+    }, [multiplayer.gameState, multiplayer.players, multiplayer.seed, modeConfig]);
+
+    // ========== WIN CONDITION CHECK ==========
+    const checkWinCondition = useCallback((timeUp = false) => {
+        const mode = modeConfig;
+        let winnerId = null;
+        
+        if (mode.winCondition === 'stocks') {
+            // Check if only one player has stocks
+            const playersWithStocks = Object.entries(playerStocks)
+                .filter(([_, stocks]) => stocks > 0);
+            
+            if (playersWithStocks.length === 1) {
+                winnerId = playersWithStocks[0][0];
+            }
+        } else if (mode.winCondition === 'score' && timeUp) {
+            // Highest score when time runs out
+            const sortedScores = Object.entries(playerScores)
+                .sort(([, a], [, b]) => b - a);
+            
+            if (sortedScores.length > 0) {
+                winnerId = sortedScores[0][0];
+            }
+        } else if (mode.winCondition === 'lastStanding') {
+            const playersWithStocks = Object.entries(playerStocks)
+                .filter(([_, stocks]) => stocks > 0);
+            
+            if (playersWithStocks.length === 1) {
+                winnerId = playersWithStocks[0][0];
+            }
+        }
+        
+        if (winnerId) {
+            // Report game end
+            if (multiplayer.connected) {
+                multiplayer.reportGameEnd?.(winnerId, playerScores, matchStats);
+            }
+            
+            // Update local stats
+            if (updateMatchStats && user) {
+                updateMatchStats({
+                    won: winnerId === multiplayer.playerId,
+                    knockouts: matchStats.knockouts,
+                    damageDealt: matchStats.totalDamage,
+                    stomps: matchStats.stomps,
+                    maxCombo: matchStats.maxCombo
+                });
+            }
+        }
+    }, [modeConfig, playerStocks, playerScores, multiplayer, matchStats, updateMatchStats, user]);
+
+    // ========== USE ITEM HANDLER ==========
+    const handleUseItem = useCallback(() => {
+        const activePowerup = playerPowerups[multiplayer.playerId];
         if (!activePowerup) return;
 
-        const playerPos = playerPositions[playerId];
+        const playerPos = playerPositions[multiplayer.playerId];
         if (!playerPos) return;
 
-        // Execute Powerup Logic
-        switch (activePowerup.id) {
-            case 'speed_boost':
-                // Handled in Puck.jsx physics
-                break;
-            case 'rocket':
-            case 'saw_blade':
-            case 'glue_gun':
-                // Spawn Projectile
-                const velocity = [0, 0, 5]; // simple forward vector (needs real aim)
-                setProjectiles(prev => [...prev, {
-                    id: Date.now(),
-                    type: activePowerup.id,
-                    position: [playerPos[0], playerPos[1] + 1, playerPos[2]],
-                    velocity: velocity,
-                    ownerId: playerId
-                }]);
-                break;
-            case 'shield':
-                // Handled in Puck state
-                break;
+        const powerupInfo = typeof activePowerup === 'string' 
+            ? getPowerupInfo(activePowerup)
+            : activePowerup;
+
+        if (!powerupInfo) return;
+
+        // Handle projectile powerups
+        if (powerupInfo.type === 'projectile') {
+            setProjectiles(prev => [...prev, {
+                id: getNextId(),
+                type: powerupInfo.id,
+                position: [playerPos[0], playerPos[1] + 0.5, playerPos[2]],
+                velocity: [0, 0, 8], // Forward
+                damage: powerupInfo.damage || 20,
+                ownerId: multiplayer.playerId
+            }]);
         }
 
-        // Consume Item (unless it's a duration buff that persists? For now consume immediately for non-buffs)
-        if (activePowerup.type !== 'buff') {
-            setPlayerPowerups(prev => ({ ...prev, [playerId]: null }));
+        // Consume non-buff powerups
+        if (powerupInfo.type !== 'buff') {
+            setPlayerPowerups(prev => ({ ...prev, [multiplayer.playerId]: null }));
         }
-    }, [playerPowerups, playerPositions]);
 
-    // Handle Impact (Hitstop + Screen Shake)
+        if (multiplayer.connected) {
+            multiplayer.usePowerup?.(powerupInfo.id);
+        }
+    }, [playerPowerups, playerPositions, multiplayer, getNextId]);
+
+    // ========== IMPACT HANDLER ==========
     const handleImpact = useCallback((intensity) => {
+        const scaledIntensity = Math.min(intensity, 20);
+        
         setIsPaused(true);
-        setScreenShake(Math.min(intensity * 0.02, 0.2));
+        setScreenShake(scaledIntensity * 0.015);
+        
+        // Combo tracking
+        const now = Date.now();
+        if (now - lastHitTime.current < 2000) {
+            setCombo(prev => {
+                const newCombo = prev + 1;
+                setMatchStats(s => ({ ...s, maxCombo: Math.max(s.maxCombo, newCombo) }));
+                return newCombo;
+            });
+        } else {
+            setCombo(1);
+        }
+        lastHitTime.current = now;
 
-        // Brief freeze
-        setTimeout(() => {
-            setIsPaused(false);
-        }, 50 + Math.min(intensity * 5, 100));
+        // Hitstop
+        setTimeout(() => setIsPaused(false), 30 + Math.min(scaledIntensity * 3, 80));
 
-        // Decay screen shake
-        const decayInterval = setInterval(() => {
+        // Shake decay
+        const decay = setInterval(() => {
             setScreenShake(prev => {
-                if (prev <= 0.01) {
-                    clearInterval(decayInterval);
+                if (prev <= 0.005) {
+                    clearInterval(decay);
                     return 0;
                 }
-                return prev * 0.8;
+                return prev * 0.85;
             });
         }, 16);
     }, []);
 
-    // Projectile Hit Handler
-    const handleProjectileHit = (projId, targetId, type) => {
-        // Apply effect (Damage, Slow, Knockback)
-        let damage = 20;
+    // ========== COLLISION HANDLER - FIX: Uses ref to avoid stale closure ==========
+    const playerDamageRef = useRef(playerDamage);
+    useEffect(() => {
+        playerDamageRef.current = playerDamage;
+    }, [playerDamage]);
 
+    const handleCollision = useCallback((impactForce) => {
+        const damage = Math.floor(impactForce * 2);
+        
+        setPlayerDamage(prev => {
+            const current = prev[multiplayer.playerId] || 0;
+            const newDamage = current + damage;
+            return { ...prev, [multiplayer.playerId]: newDamage };
+        });
+        
+        setMatchStats(s => ({ ...s, totalDamage: s.totalDamage + damage }));
+
+        if (multiplayer.connected) {
+            // Use ref to get latest value
+            const currentDamage = playerDamageRef.current[multiplayer.playerId] || 0;
+            multiplayer.reportDamage?.(currentDamage + damage);
+        }
+    }, [multiplayer]);
+
+    // ========== STOMP HANDLER ==========
+    const handleStomp = useCallback((targetId, stompData) => {
+        const damage = calculateStompDamage(stompData.velocity || 10);
+        
+        setPlayerDamage(prev => ({
+            ...prev,
+            [targetId]: (prev[targetId] || 0) + damage
+        }));
+        
+        setMatchStats(s => ({ ...s, stomps: s.stomps + 1 }));
+        handleImpact(15);
+        
+        // Stomp effect
+        const targetPos = playerPositions[targetId];
+        if (targetPos) {
+            setEffects(prev => [...prev, {
+                id: getNextId(),
+                type: 'stomp',
+                position: targetPos
+            }]);
+        }
+
+        if (multiplayer.connected) {
+            multiplayer.reportStomp?.(targetId, damage);
+        }
+    }, [playerPositions, multiplayer, handleImpact, getNextId]);
+
+    // ========== KNOCKOUT HANDLER ==========
+    const handleKnockout = useCallback((knockedOutPlayerId) => {
+        const pos = playerPositions[knockedOutPlayerId] || [0, 0, 0];
+        const player = multiplayer.players.find(p => p.id === knockedOutPlayerId);
+        const color = player?.color || '#ffffff';
+
+        // Dramatic effects
+        setSlowmo(true);
+        setKnockoutTarget(knockedOutPlayerId);
+        
+        setTimeout(() => {
+            setSlowmo(false);
+            setKnockoutTarget(null);
+        }, 1000);
+
+        // Visual effects - FIX: Using single ID counter
+        const effectId = getNextId();
+        setEffects(prev => [
+            ...prev,
+            { id: effectId, type: 'explosion', position: [...pos], color },
+            { id: getNextId(), type: 'shockwave', position: [pos[0], 0.1, pos[2]], color }
+        ]);
+
+        // Update stocks
+        setPlayerStocks(prev => {
+            const newStocks = { ...prev };
+            newStocks[knockedOutPlayerId] = Math.max(0, (prev[knockedOutPlayerId] || modeConfig.stocksPerPlayer) - 1);
+            return newStocks;
+        });
+
+        // Score for killer
+        multiplayer.players.forEach(p => {
+            if (p.id !== knockedOutPlayerId) {
+                setPlayerScores(prev => ({
+                    ...prev,
+                    [p.id]: (prev[p.id] || 0) + 1
+                }));
+            }
+        });
+
+        // Reset damage
+        setPlayerDamage(prev => ({ ...prev, [knockedOutPlayerId]: 0 }));
+        setMatchStats(s => ({ ...s, knockouts: s.knockouts + 1 }));
+
+        setKnockoutMessage('KNOCKOUT!');
+        setTimeout(() => {
+            setKnockoutMessage(null);
+            // Check win condition after knockout
+            setTimeout(() => checkWinCondition(), 100);
+        }, 1500);
+
+        if (multiplayer.connected) {
+            multiplayer.reportKnockout?.(knockedOutPlayerId);
+        }
+    }, [playerPositions, multiplayer, modeConfig.stocksPerPlayer, getNextId, checkWinCondition]);
+
+    // ========== POSITION UPDATE ==========
+    const handlePositionUpdate = useCallback((position, velocity) => {
+        setPlayerPositions(prev => ({
+            ...prev,
+            [multiplayer.playerId]: position
+        }));
+
+        if (Math.random() < 0.25) {
+            multiplayer.sendPosition?.(position, velocity, 0);
+        }
+    }, [multiplayer]);
+
+    // ========== POWERUP COLLECTION ==========
+    const handleCollectPowerup = useCallback((powerupId, playerId) => {
+        const powerup = localPowerups.find(p => p.id === powerupId);
+        if (!powerup) return;
+
+        setPlayerPowerups(prev => ({
+            ...prev,
+            [playerId]: powerup.type
+        }));
+
+        setLocalPowerups(prev => prev.filter(p => p.id !== powerupId));
+
+        if (multiplayer.connected) {
+            multiplayer.collectPowerup?.(powerupId);
+        }
+
+        // Handle buff duration
+        const powerupInfo = getPowerupInfo(powerup.type?.id || powerup.type);
+        if (powerupInfo?.duration > 0) {
+            setTimeout(() => {
+                setPlayerPowerups(prev => ({
+                    ...prev,
+                    [playerId]: null
+                }));
+            }, powerupInfo.duration);
+        }
+    }, [localPowerups, multiplayer]);
+
+    // ========== EFFECT CLEANUP ==========
+    const handleEffectComplete = useCallback((effectId) => {
+        setEffects(prev => prev.filter(e => e.id !== effectId));
+    }, []);
+
+    // ========== PROJECTILE HIT ==========
+    const handleProjectileHit = useCallback((projId, targetId, type) => {
+        let damage = 20;
         if (type === 'rocket') damage = 35;
         if (type === 'bomb_throw') damage = 50;
-
-        // Special Effects
-        if (type === 'glue_gun') {
-            // Apply Slow (Implementation depends on how player stats are handled, effectively just damage for now + console log)
-            console.log("Applied GLUE to " + targetId);
-            // TODO: actual slowing logic would go into player state
-        }
 
         setPlayerDamage(prev => ({
             ...prev,
             [targetId]: (prev[targetId] || 0) + damage
         }));
-        // Remove projectile
+        
         setProjectiles(prev => prev.filter(p => p.id !== projId));
-    };
+    }, []);
 
-    // Powerup Management (Loadout based)
+    // ========== POWERUP SPAWNING ==========
+    useEffect(() => {
+        if (multiplayer.gameState !== 'playing') return;
+        if (multiplayer.connected) return;
+
+        const spawnRate = modeConfig.powerupSpawnRate || 1;
+        const interval = (PHYSICS_CONFIG.powerups.minSpawnInterval + 
+            Math.random() * (PHYSICS_CONFIG.powerups.maxSpawnInterval - PHYSICS_CONFIG.powerups.minSpawnInterval)) / spawnRate;
+
+        const spawnInterval = setInterval(() => {
+            if (localPowerups.length < PHYSICS_CONFIG.powerups.maxOnField) {
+                setLocalPowerups(prev => [...prev, {
+                    id: `local_${getNextId()}`,
+                    type: getRandomPowerupType(),
+                    position: getRandomPowerupPosition(mapData)
+                }]);
+            }
+        }, interval);
+
+        return () => clearInterval(spawnInterval);
+    }, [multiplayer.gameState, multiplayer.connected, localPowerups.length, modeConfig.powerupSpawnRate, mapData, getNextId]);
+
+    // ========== LOADOUT POWERUP REFRESH ==========
     useEffect(() => {
         if (multiplayer.gameState !== 'playing') return;
 
-        const spawnInterval = setInterval(() => {
-            // Check if we have an empty slot (logic: currently only 1 active slot supported for simplicity)
+        const refreshInterval = setInterval(() => {
             setPlayerPowerups(prev => {
-                if (prev[multiplayer.playerId]) return prev; // Already have one
+                if (prev[multiplayer.playerId]) return prev;
 
-                // Pick random from loadout
-                const myLoadout = playerLoadouts[multiplayer.playerId] || ['speed_boost', 'rocket', 'shield'];
+                const myLoadout = playerLoadouts[multiplayer.playerId] || DEFAULT_LOADOUT || ['speed_boost', 'rocket', 'shield'];
                 const randomId = myLoadout[Math.floor(Math.random() * myLoadout.length)];
-
                 const info = getPowerupInfo(randomId);
-                return {
-                    ...prev,
-                    [multiplayer.playerId]: { id: randomId, ...info }
-                };
+                
+                return { ...prev, [multiplayer.playerId]: info };
             });
-        }, 5000); // Spawn every 5s if empty
+        }, 5000);
 
-        return () => clearInterval(spawnInterval);
+        return () => clearInterval(refreshInterval);
     }, [multiplayer.gameState, multiplayer.playerId, playerLoadouts]);
 
-    // Use server powerups if connected, otherwise local
-    const powerups = multiplayer.connected && multiplayer.gameState === 'playing'
-        ? multiplayer.serverPowerups.map(p => ({
-            id: p.id,
-            type: POWERUP_TYPES[p.type.toUpperCase()] || { id: p.type, color: '#ffffff' },
-            position: p.position,
-        }))
-        : localPowerups;
-
-    // Local power-up spawning (for single player or offline)
+    // ========== MULTIPLAYER HANDLERS ==========
     useEffect(() => {
-        if (multiplayer.gameState === 'playing' && !multiplayer.connected) {
-            const spawnInterval = setInterval(() => {
-                if (localPowerups.length < 3) {
-                    setLocalPowerups(prev => [...prev, {
-                        id: `local_${nextPowerupId.current++}`,
-                        type: getRandomPowerupType(),
-                        position: getRandomPowerupPosition(),
-                    }]);
-                }
-            }, 8000 + Math.random() * 4000);
-
-            return () => clearInterval(spawnInterval);
-        }
-    }, [multiplayer.gameState, multiplayer.connected, localPowerups.length]);
-
-    // Handle damage collision
-    const handleCollision = useCallback((impactForce) => {
-        // Only register significant hits if not connected (single player test)
-        // In multiplayer, the server should ideally track this, but for now we do local prediction
-
-        setPlayerDamage(prev => {
-            const current = prev[multiplayer.playerId] || 0;
-            return {
-                ...prev,
-                [multiplayer.playerId]: current + impactForce // Add damage based on impact
-            };
-        });
-
-        // Notify server of new damage value
-        if (multiplayer.connected) {
-            multiplayer.reportDamage((playerDamage[multiplayer.playerId] || 0) + impactForce);
-        }
-    }, [multiplayer, playerDamage]);
-
-    // Handle position update from local player
-    const handlePositionUpdate = useCallback((position, velocity) => {
-        setPlayerPositions(prev => ({
-            ...prev,
-            [multiplayer.playerId]: position,
-        }));
-
-        // Send to server every few frames
-        if (Math.random() < 0.3) {
-            multiplayer.sendPosition(position, velocity, 0);
-        }
-    }, [multiplayer]);
-
-    // Register multiplayer event handlers
-    useEffect(() => {
-        multiplayer.registerHandlers({
+        multiplayer.registerHandlers?.({
             onPlayerMoved: ({ playerId, position, velocity }) => {
-                setPlayerPositions(prev => ({
-                    ...prev,
-                    [playerId]: position,
-                }));
+                setPlayerPositions(prev => ({ ...prev, [playerId]: position }));
             },
             onKnockout: (scorerId, knockedOutId) => {
                 setKnockoutMessage('KNOCKOUT!');
-                // Reset damage on knockout
                 setPlayerDamage(prev => ({ ...prev, [knockedOutId]: 0 }));
                 setTimeout(() => setKnockoutMessage(null), 1500);
             },
-            onDamageUpdate: (id, damage) => { // New handler
+            onDamageUpdate: (id, damage) => {
                 setPlayerDamage(prev => ({ ...prev, [id]: damage }));
             },
             onPowerupRejected: (powerupId) => {
-                console.log(`❌ Failed to collect powerup ${powerupId} - already taken`);
-                // Powerup will be removed from UI via powerupRemoved event from winner
+                console.log(`Powerup ${powerupId} already taken`);
             }
         });
     }, [multiplayer]);
 
-    // Handle knockout
-    const handleKnockout = useCallback((knockedOutPlayerId) => {
-        // Add explosion effect
-        const pos = playerPositions[knockedOutPlayerId] || [0, 0, 0];
-        const player = multiplayer.players.find(p => p.id === knockedOutPlayerId);
-        const color = player?.color || '#ffffff';
+    // ========== POWERUPS LIST ==========
+    const powerups = multiplayer.connected && multiplayer.gameState === 'playing'
+        ? multiplayer.serverPowerups?.map(p => ({
+            id: p.id,
+            type: p.type,
+            position: p.position
+        })) || []
+        : localPowerups;
 
-        const effectId = nextEffectId.current++;
-        setEffects(prev => [
-            ...prev,
-            { id: effectId, type: 'explosion', position: pos, color },
-            { id: effectId + 1, type: 'shockwave', position: [pos[0], 0, pos[2]], color },
-        ]);
-        nextEffectId.current += 2;
+    // ========== HUD DATA ==========
+    const hudScores = {
+        player1: playerScores[multiplayer.playerId] || 0,
+        player2: Object.entries(playerScores).find(([id]) => id !== multiplayer.playerId)?.[1] || 0
+    };
 
-        setKnockoutMessage('KNOCKOUT!');
-        setTimeout(() => setKnockoutMessage(null), 1500);
+    const hudDamage = {
+        player1: playerDamage[multiplayer.playerId] || 0,
+        player2: Object.entries(playerDamage).find(([id]) => id !== multiplayer.playerId)?.[1] || 0
+    };
 
-        // Report to server (scorer is whoever caused it - for now, any other player)
-        if (multiplayer.connected) {
-            multiplayer.reportKnockout(knockedOutPlayerId);
-        }
-    }, [playerPositions, multiplayer]);
+    const hudStocks = modeConfig.stocksPerPlayer < Infinity ? {
+        player1: playerStocks[multiplayer.playerId] ?? modeConfig.stocksPerPlayer,
+        player2: Object.entries(playerStocks).find(([id]) => id !== multiplayer.playerId)?.[1] ?? modeConfig.stocksPerPlayer
+    } : undefined;
 
-    // Handle power-up collection
-    const handleCollectPowerup = useCallback((powerupId, playerId) => {
-        const powerup = powerups.find(p => p.id === powerupId);
-        if (!powerup) return;
-
-        // Apply power-up effect
-        setPlayerPowerups(prev => ({
-            ...prev,
-            [playerId]: powerup.type,
-        }));
-
-        // Remove from local list
-        setLocalPowerups(prev => prev.filter(p => p.id !== powerupId));
-
-        // Notify server
-        if (multiplayer.connected) {
-            multiplayer.collectPowerup(powerupId);
-        }
-
-        // Clear after duration
-        if (powerup.type.duration > 0) {
-            setTimeout(() => {
-                setPlayerPowerups(prev => ({
-                    ...prev,
-                    [playerId]: null,
-                }));
-            }, powerup.type.duration);
-        }
-    }, [powerups, multiplayer]);
-
-    const handleEffectComplete = useCallback((effectId) => {
-        setEffects(prev => prev.filter(e => e.id !== effectId));
-    }, []);
-
-    // Get current view based on game state
-    const renderView = () => {
-        const gameState = multiplayer.gameState;
-
-        // Lobby/Menu
-        if (gameState === 'disconnected' || gameState === 'lobby') {
+    // ========== RENDER OVERLAY ==========
+    const renderOverlay = () => {
+        if (multiplayer.gameState === 'disconnected' || multiplayer.gameState === 'lobby') {
             return (
                 <Lobby
                     connected={multiplayer.connected}
@@ -396,19 +647,32 @@ export default function BattleArena() {
                     onCreateRoom={multiplayer.createRoom}
                     onJoinRoom={multiplayer.joinRoom}
                     onQuickJoin={multiplayer.quickJoin}
-                    onReady={multiplayer.setReady}
+                    onReady={(ready, loadout) => {
+                        setPlayerLoadouts(prev => ({ ...prev, [multiplayer.playerId]: loadout }));
+                        multiplayer.setReady?.(ready);
+                    }}
+                    onVoteMap={(mapId) => {
+                        multiplayer.voteMap?.(mapId);
+                    }}
+                    onSelectMode={(mode) => {
+                        setGameMode(mode);
+                        multiplayer.selectMode?.(mode);
+                    }}
                     onBack={multiplayer.leaveRoom}
                 />
             );
         }
 
-        // Victory
-        if (gameState === 'ended') {
+        if (multiplayer.gameState === 'ended') {
+            const winnerId = multiplayer.winner || Object.entries(playerScores)
+                .sort(([,a], [,b]) => b - a)[0]?.[0];
+            
             return (
                 <VictoryScreen
-                    winner={multiplayer.winner === multiplayer.playerId ? 'You' : 'Opponent'}
-                    scores={multiplayer.scores}
-                    onRestart={multiplayer.leaveRoom}
+                    winner={winnerId === multiplayer.playerId ? 'You' : 'Opponent'}
+                    scores={hudScores}
+                    stats={matchStats}
+                    onRestart={() => multiplayer.requestRematch?.()}
                     onMenu={multiplayer.leaveRoom}
                 />
             );
@@ -417,23 +681,15 @@ export default function BattleArena() {
         return null;
     };
 
-    // Format scores for HUD
-    const scores = {
-        player1: multiplayer.scores[multiplayer.playerId] || 0,
-        player2: Object.entries(multiplayer.scores).find(([id]) => id !== multiplayer.playerId)?.[1] || 0,
-    };
-
     return (
         <div className="game-container">
-            {/* Overlay UI */}
-            {renderView()}
+            {renderOverlay()}
 
-            {/* Game Canvas */}
             <Canvas
                 className="game-canvas"
                 shadows
-                camera={{ position: [0, 18, 15], fov: 45 }}
-                gl={{ antialias: true }}
+                camera={{ position: [0, 18, 15], fov: 50 }}
+                gl={{ antialias: true, alpha: false }}
             >
                 <Suspense fallback={<LoadingScreen />}>
                     <Physics gravity={PHYSICS_CONFIG.gravity}>
@@ -447,17 +703,21 @@ export default function BattleArena() {
                                     playerPowerups={playerPowerups}
                                     playerDamage={playerDamage}
                                     onKnockout={handleKnockout}
+                                    onStomp={handleStomp}
                                     onCollectPowerup={handleCollectPowerup}
                                     onPositionUpdate={handlePositionUpdate}
                                     onCollision={handleCollision}
-                                    onUseItem={() => handleUseItem(multiplayer.playerId)}
+                                    onUseItem={handleUseItem}
                                     effects={effects}
                                     onEffectComplete={handleEffectComplete}
+                                    mapData={mapData}
                                     mapType={multiplayer.selectedMap}
                                     onImpact={handleImpact}
                                     isPaused={isPaused}
                                     screenShake={screenShake}
-                                    seed={multiplayer.seed}
+                                    knockoutTarget={knockoutTarget}
+                                    slowmo={slowmo}
+                                    gameMode={gameMode}
                                 />
                                 <ProjectileSystem
                                     projectiles={projectiles}
@@ -467,12 +727,11 @@ export default function BattleArena() {
                             </>
                         )}
 
-                        {/* Show arena preview in lobby */}
                         {(multiplayer.gameState === 'disconnected' || multiplayer.gameState === 'lobby') && (
                             <>
-                                <Stars radius={100} depth={50} count={2000} factor={4} saturation={0} fade speed={1} />
+                                <Stars radius={100} depth={50} count={3000} factor={4} fade speed={0.5} />
                                 <Environment preset="night" />
-                                <fog attach="fog" args={['#0a0a1a', 25, 70]} />
+                                <fog attach="fog" args={['#0a0a1a', 20, 60]} />
                                 <ArenaChaos />
                             </>
                         )}
@@ -480,25 +739,31 @@ export default function BattleArena() {
                 </Suspense>
             </Canvas>
 
-            {/* HUD Overlay */}
             {multiplayer.gameState === 'playing' && (
                 <GameHUD
-                    scores={scores}
-                    timer={120}
-                    activePowerup={playerPowerups[multiplayer.playerId] ?
-                        (playerPowerups[multiplayer.playerId].type ||
-                            // Map server powerup type to full info if needed, or assume it's properly hydrated
-                            getPowerupInfo(playerPowerups[multiplayer.playerId].id || playerPowerups[multiplayer.playerId]))
-                        : null}
-                    loadout={playerLoadouts[multiplayer.playerId] || DEFAULT_LOADOUT} // Pass actual loadout
-                    damageStats={{
-                        player1: playerDamage[multiplayer.playerId] || 0,
-                        player2: Object.entries(playerDamage).find(([id]) => id !== multiplayer.playerId)?.[1] || 0
-                    }}
+                    scores={hudScores}
+                    timer={gameTimer}
+                    activePowerup={playerPowerups[multiplayer.playerId]}
+                    loadout={playerLoadouts[multiplayer.playerId] || DEFAULT_LOADOUT || ['speed_boost', 'rocket', 'shield']}
+                    damageStats={hudDamage}
+                    stocks={hudStocks}
                     knockoutMessage={knockoutMessage}
-                    gameStatus="playing"
+                    gameStatus={multiplayer.gameState}
+                    gameMode={gameMode}
+                    combo={combo}
+                    lastHitTime={lastHitTime.current}
+                    players={multiplayer.players}
+                    localPlayerId={multiplayer.playerId}
                 />
             )}
+
+            <style jsx>{`
+                .game-container {
+                    position: fixed;
+                    inset: 0;
+                    background: #000;
+                }
+            `}</style>
         </div>
     );
 }
