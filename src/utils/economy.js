@@ -70,33 +70,11 @@ export function openPack(packType = 'single') {
     return slots;
 }
 
-// ============ PLACEHOLDER ICON DATABASE ============
-// This will be replaced with actual icon data when assets are uploaded
-const ICON_DATABASE = {};
+// ============ ICON DATABASE ============
+import rawIconData from './icons.json';
 
-// Generate placeholder entries for 150 icons
-for (let i = 1; i <= 150; i++) {
-    // Distribute icons across tiers based on drop rates
-    let tier;
-    if (i <= 60) tier = 1;       // 60 Common
-    else if (i <= 90) tier = 2;  // 30 Uncommon
-    else if (i <= 108) tier = 3; // 18 Rare
-    else if (i <= 120) tier = 4; // 12 Epic
-    else if (i <= 129) tier = 5; // 9 Ultra Epic
-    else if (i <= 135) tier = 6; // 6 Legendary
-    else if (i <= 140) tier = 7; // 5 Mythic
-    else if (i <= 143) tier = 8; // 3 Celestial
-    else if (i <= 146) tier = 9; // 3 Cosmic
-    else tier = 10;              // 4 Divine
-
-    ICON_DATABASE[i] = {
-        id: i,
-        tier: tier,
-        name: `Icon #${i}`,
-        description: `A ${TIERS[tier].name} tier collectible.`,
-        imageUrl: `/icons/Tier_${tier}_${TIERS[tier].name}/icon_${String(i).padStart(3, '0')}.png`
-    };
-}
+// Use the imported JSON data directly
+const ICON_DATABASE = rawIconData;
 
 export function getRandomIconFromTier(tier) {
     const iconsInTier = Object.values(ICON_DATABASE).filter(icon => icon.tier === tier);

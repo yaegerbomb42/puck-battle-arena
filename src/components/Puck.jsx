@@ -1,9 +1,228 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, extend } from '@react-three/fiber';
 import { useSphere } from '@react-three/cannon';
-import { Text, Billboard } from '@react-three/drei';
+import { Text, Billboard, useTexture, shaderMaterial } from '@react-three/drei';
 import * as THREE from 'three';
 import { PHYSICS_CONFIG, isInKnockoutZone, canStomp, calculateStompDamage } from '../utils/physics';
+
+// ============================================
+// LEGENDARY SHADER MATERIAL
+// ============================================
+const LegendaryMaterial = shaderMaterial(
+    { time: 0, map: null, color: new THREE.Color(0.2, 0.6, 1.0) },
+    // Vertex Shader
+    `
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+    uniform float time;
+    void main() {
+      vUv = uv;
+      vNormal = normalize(normalMatrix * normal);
+      vPosition = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+    // Fragment Shader
+    `
+    uniform float time;
+    uniform sampler2D map;
+    uniform vec3 color;
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+
+    void main() {
+      vec4 texColor = texture2D(map, vUv);
+      
+      // holographic wave effect
+      float wave = sin(vPosition.y * 10.0 + time * 2.0) * 0.5 + 0.5;
+      float shine = max(0.0, dot(vNormal, vec3(0.0, 1.0, 0.0)));
+      
+      // pulse
+      float pulse = sin(time * 3.0) * 0.2 + 0.8;
+      
+      // Combine functionality: keep icon visible but add magical glow
+      vec3 finalColor = texColor.rgb * pulse + color * wave * 0.5;
+      
+      // Rim light
+      float rim = 1.0 - max(0.0, dot(vNormal, vec3(0.0, 0.0, 1.0)));
+      rim = pow(rim, 3.0);
+      finalColor += vec3(0.5, 0.8, 1.0) * rim;
+
+      gl_FragColor = vec4(finalColor, texColor.a);
+    }
+  `
+);
+
+
+// ============================================
+// COSMIC SHADER (TIER 9) - Dark Matter & Rainbows
+// ============================================
+const CosmicMaterial = shaderMaterial(
+    { time: 0, map: null },
+    // Vertex
+    `
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+    void main() {
+      vUv = uv;
+      vNormal = normalize(normalMatrix * normal);
+      vPosition = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+    // Fragment
+    `
+    uniform float time;
+    uniform sampler2D map;
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+
+    void main() {
+      // Swirling UVs
+      vec2 centered = vUv - 0.5;
+      float dist = length(centered);
+      float angle = atan(centered.y, centered.x);
+      
+      float spiral = angle + dist * 5.0 - time * 1.5;
+      vec2 spiralUv = vec2(cos(spiral), sin(spiral)) * dist + 0.5;
+      
+      // Chromatic aberration
+      float shift = sin(time) * 0.01;
+      vec4 texColorR = texture2D(map, spiralUv + vec2(shift, 0.0));
+      vec4 texColorG = texture2D(map, spiralUv);
+      vec4 texColorB = texture2D(map, spiralUv - vec2(shift, 0.0));
+      
+      vec3 finalColor = vec3(texColorR.r, texColorG.g, texColorB.b);
+      
+      // Dark Matter void edges
+      float voidEdge = smoothstep(0.4, 0.5, dist + sin(time * 2.0)*0.05);
+      finalColor = mix(finalColor, vec3(0.05, 0.0, 0.1), voidEdge); // Dark purple void
+      
+      // Rainbow rim
+      vec3 rimColor = 0.5 + 0.5 * cos(time + vUv.xyx + vec3(0, 2, 4));
+      float rim = 1.0 - max(0.0, dot(vNormal, vec3(0.0, 0.0, 1.0)));
+      rim = pow(rim, 2.0);
+      
+      finalColor += rimColor * rim * 0.8;
+
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
+  `
+);
+
+// ============================================
+// DIVINE SHADER (TIER 10) - Golden Light & Pulse
+// ============================================
+const DivineMaterial = shaderMaterial(
+    { time: 0, map: null },
+    // Vertex
+    `
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+    void main() {
+      vUv = uv;
+      vNormal = normalize(normalMatrix * normal);
+      vPosition = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+    // Fragment
+    `
+    uniform float time;
+    uniform sampler2D map;
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    
+    // Simplex noise function would be huge, using simple pseudo-noise
+    float rand(vec2 co){
+        return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec4 texColor = texture2D(map, vUv);
+      
+      // Golden Pulse
+      float heartbeat = abs(sin(time * 2.0));
+      vec3 gold = vec3(1.0, 0.84, 0.0);
+      
+      // "Ascending" particles (noise moving up)
+      float particle = step(0.98, rand(vUv + vec2(0.0, -time * 0.5)));
+      
+      vec3 finalColor = texColor.rgb + (gold * heartbeat * 0.3);
+      finalColor += gold * particle; // Add particles
+      
+      // Intense White Rim
+      float rim = 1.0 - max(0.0, dot(vNormal, vec3(0.0, 0.0, 1.0)));
+      rim = pow(rim, 4.0);
+      finalColor += vec3(1.0) * rim * 1.5;
+
+      gl_FragColor = vec4(finalColor, texColor.a);
+    }
+  `
+);
+
+// ============================================
+// MYSTERY SHADER (UNIQUE) - Reality Glitch
+// ============================================
+const MysteryMaterial = shaderMaterial(
+    { time: 0, map: null },
+    // Vertex
+    `
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+    uniform float time;
+    
+    void main() {
+      vUv = uv;
+      vNormal = normalize(normalMatrix * normal);
+      
+      // Vertex jitter glitch
+      vec3 pos = position;
+      float glitch = step(0.95, sin(time * 10.0 + position.y * 5.0));
+      pos.x += glitch * 0.1 * sin(time * 20.0);
+      
+      vPosition = pos;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }
+  `,
+    // Fragment
+    `
+    uniform float time;
+    uniform sampler2D map;
+    varying vec2 vUv;
+    varying vec3 vNormal;
+    
+    void main() {
+      // Voronoi-ish fracture (simplified grid)
+      vec2 grid = fract(vUv * 10.0);
+      float cellBorder = step(0.9, grid.x) + step(0.9, grid.y);
+      
+      vec4 texColor = texture2D(map, vUv);
+      
+      // Void background showing through cracks
+      vec3 voidColor = vec3(0.0); // Pitch black
+      
+      // Intermittent "Reality Failure"
+      float failure = smoothstep(0.4, 0.6, sin(time * 0.5)); // Slow fade in/out
+      
+      vec3 finalColor = mix(texColor.rgb, voidColor, cellBorder * failure);
+      
+      // Matrix rain overlay? No, keeping it subtle void.
+      
+      gl_FragColor = vec4(finalColor, texColor.a);
+    }
+  `
+);
+
+extend({ LegendaryMaterial, CosmicMaterial, DivineMaterial, MysteryMaterial });
+
+
 
 // ============================================
 // OPTIMIZED TRAIL - Reuses geometry, no memory leak
@@ -12,13 +231,13 @@ function PuckTrail({ positionsRef, color, active }) {
     const lineRef = useRef();
     const geometryRef = useRef(new THREE.BufferGeometry());
     const positionsArray = useRef(new Float32Array(60)); // 20 points * 3 coords
-    
+
     useFrame(() => {
         if (!lineRef.current || !active) return;
-        
+
         const positions = positionsRef.current;
         if (positions.length < 2) return;
-        
+
         // Update buffer in place instead of creating new geometry
         for (let i = 0; i < Math.min(positions.length, 20); i++) {
             const pos = positions[positions.length - 1 - i] || [0, 0, 0];
@@ -26,7 +245,7 @@ function PuckTrail({ positionsRef, color, active }) {
             positionsArray.current[i * 3 + 1] = pos[1];
             positionsArray.current[i * 3 + 2] = pos[2];
         }
-        
+
         geometryRef.current.setAttribute(
             'position',
             new THREE.BufferAttribute(positionsArray.current.slice(0, positions.length * 3), 3)
@@ -59,7 +278,7 @@ function DamageDisplay({ damage, position, playerName, color }) {
         if (damage < 150) return '#ff8800';
         return '#ff0000';
     }, [damage]);
-    
+
     const scale = 1 + Math.min(damage / 200, 0.5);
     const shakeOffset = damage > 100 ? (Math.random() - 0.5) * 0.05 * (damage / 100) : 0;
 
@@ -95,10 +314,10 @@ function DamageDisplay({ damage, position, playerName, color }) {
 function GroundIndicator({ position, color, radius, isAirborne }) {
     const opacity = isAirborne ? 0.15 : 0.35;
     const scale = isAirborne ? 0.6 : 1;
-    
+
     return (
-        <mesh 
-            position={[position[0], 0.02, position[2]]} 
+        <mesh
+            position={[position[0], 0.02, position[2]]}
             rotation={[-Math.PI / 2, 0, 0]}
             scale={[scale, scale, 1]}
         >
@@ -113,7 +332,7 @@ function GroundIndicator({ position, color, radius, isAirborne }) {
 // ============================================
 function StompIndicator({ active, position }) {
     if (!active) return null;
-    
+
     return (
         <mesh position={[position[0], 0.1, position[2]]} rotation={[-Math.PI / 2, 0, 0]}>
             <ringGeometry args={[0.3, 0.6, 4]} />
@@ -127,14 +346,14 @@ function StompIndicator({ active, position }) {
 // ============================================
 function ShieldEffect({ position, radius }) {
     const meshRef = useRef();
-    
+
     useFrame((state) => {
         if (meshRef.current) {
             meshRef.current.rotation.y = state.clock.elapsedTime;
             meshRef.current.material.opacity = 0.25 + Math.sin(state.clock.elapsedTime * 3) * 0.1;
         }
     });
-    
+
     return (
         <mesh ref={meshRef} position={position}>
             <sphereGeometry args={[radius * 1.6, 32, 32]} />
@@ -159,6 +378,7 @@ export default function Puck({
     startPosition,
     isLocalPlayer = false,
     iconPath,
+    tier = 1, // Add tier prop to determine shader
     powerup,
     damage = 0,
     onKnockout,
@@ -174,14 +394,14 @@ export default function Puck({
     gameMode = 'knockout'
 }) {
     const config = PHYSICS_CONFIG.puck;
-    
+
     // ========== COMPUTED PHYSICS VALUES ==========
     const effectiveRadius = useMemo(() => {
         if (powerup?.id === 'giant') return config.radius * 1.8;
         if (powerup?.id === 'shrink') return config.radius * 0.6;
         return config.radius;
     }, [powerup?.id, config.radius]);
-    
+
     const effectiveMass = useMemo(() => {
         let mass = config.mass;
         if (powerup?.id === 'giant') mass *= 2.5;
@@ -202,9 +422,9 @@ export default function Puck({
         args: [effectiveRadius],
         linearDamping: config.linearDamping,
         angularDamping: config.angularDamping,
-        material: { 
+        material: {
             restitution: config.restitution + (damage / 400), // More bouncy when damaged
-            friction: powerup?.id === 'ghost' ? 0 : config.friction 
+            friction: powerup?.id === 'ghost' ? 0 : config.friction
         },
         userData: { playerId, type: 'puck' },
         onCollide: handlePhysicsCollision
@@ -218,7 +438,7 @@ export default function Puck({
     const [isFlashing, setIsFlashing] = useState(false);
     const [isAirborne, setIsAirborne] = useState(false);
     const [stompTarget, setStompTarget] = useState(null);
-    
+
     // Input state with debouncing - FIX for spacebar spam
     const inputState = useRef({
         keys: {},
@@ -231,10 +451,10 @@ export default function Puck({
     // ========== COLLISION HANDLER ==========
     const handlePhysicsCollision = useCallback((e) => {
         if (!isLocalPlayer || isPaused) return;
-        
+
         const otherBody = e.body;
         const impactVelocity = e.contact?.impactVelocity || 0;
-        
+
         // Player-to-player collision
         if (otherBody?.userData?.type === 'puck' && impactVelocity > 2) {
             const knockbackForce = PHYSICS_CONFIG.collision.baseForce * knockbackMultiplier;
@@ -243,24 +463,24 @@ export default function Puck({
                 e.contact.contactNormal[1],
                 e.contact.contactNormal[2]
             ).normalize();
-            
+
             // Upward bias increases with damage (Smash Bros style)
             const upwardBias = Math.min(damage / 150, 0.6);
-            
+
             api.applyImpulse([
                 normal.x * knockbackForce,
                 (Math.abs(normal.y) + upwardBias) * knockbackForce * 0.5,
                 normal.z * knockbackForce
             ], [0, 0, 0]);
-            
+
             onCollision?.(impactVelocity * knockbackMultiplier);
-            
+
             // Heavy hit effects
             if (impactVelocity > 5) {
                 onImpact?.(impactVelocity);
                 setIsFlashing(true);
                 setTimeout(() => setIsFlashing(false), 80);
-                
+
                 // Funny physics - random spin on big hits
                 if (impactVelocity > 8 && Math.random() > 0.6) {
                     api.applyTorque([
@@ -271,7 +491,7 @@ export default function Puck({
                 }
             }
         }
-        
+
         // Special tile interactions
         const tileType = otherBody?.userData?.type;
         if (tileType === 'boost_pad') {
@@ -303,17 +523,17 @@ export default function Puck({
 
         const handleKeyDown = (e) => {
             inputState.current.keys[e.code] = true;
-            
+
             // Space key - single press detection (FIX: no more spam)
             if (e.code === 'Space' && !inputState.current.spaceHeld) {
                 inputState.current.spacePressed = true;
                 inputState.current.spaceHeld = true;
             }
         };
-        
+
         const handleKeyUp = (e) => {
             inputState.current.keys[e.code] = false;
-            
+
             if (e.code === 'Space') {
                 inputState.current.spaceHeld = false;
             }
@@ -357,13 +577,13 @@ export default function Puck({
             if (powerup?.id === 'speed_boost') accel *= 1.8;
             if (powerup?.id === 'shrink') accel *= 1.3;
             if (powerup?.id === 'giant') accel *= 0.7;
-            
+
             // Reverse controls if cursed
             if (powerup?.id === 'cursed') {
                 forceX *= -1;
                 forceZ *= -1;
             }
-            
+
             // Air control reduction
             const isInAir = position.current[1] > 1;
             if (isInAir) {
@@ -378,7 +598,7 @@ export default function Puck({
             // SPACE KEY - Use item OR jump (single press only)
             if (spacePressed) {
                 inputState.current.spacePressed = false; // Consume the press
-                
+
                 if (powerup && powerup.type !== 'buff') {
                     // Use active powerup
                     onUseItem?.();
@@ -410,39 +630,39 @@ export default function Puck({
     // ========== GAME LOGIC FRAME UPDATE ==========
     useFrame(() => {
         if (isPaused) return;
-        
+
         // Track airborne state
         const currentlyAirborne = position.current[1] > 1;
         setIsAirborne(currentlyAirborne);
-        
+
         // AIR STOMP DETECTION
         if (isLocalPlayer && currentlyAirborne && velocity.current[1] < -4) {
             // Check for players below
             Object.entries(allPlayerPositions).forEach(([id, pos]) => {
                 if (id === playerId || !pos) return;
-                
+
                 if (canStomp(position.current, velocity.current, pos)) {
                     setStompTarget(id);
-                    
+
                     const stompDamage = calculateStompDamage(Math.abs(velocity.current[1]));
                     onStomp?.(id, { damage: stompDamage, knockback: Math.abs(velocity.current[1]) * 2 });
-                    
+
                     // Bounce up after stomp
                     api.velocity.set(
                         velocity.current[0] * 0.3,
                         Math.abs(velocity.current[1]) * 0.7,
                         velocity.current[2] * 0.3
                     );
-                    
+
                     setTimeout(() => setStompTarget(null), 200);
                 }
             });
         }
-        
+
         // Position update for local player
         if (isLocalPlayer) {
             onPositionUpdate?.(position.current, velocity.current);
-            
+
             // Knockout check
             if (!isRespawning && isInKnockoutZone(position.current)) {
                 handleKnockout();
@@ -454,7 +674,7 @@ export default function Puck({
     const handleKnockout = useCallback(() => {
         setIsRespawning(true);
         onKnockout?.(playerId);
-        
+
         setTimeout(() => {
             api.position.set(...startPosition);
             api.velocity.set(0, 0, 0);
@@ -470,30 +690,48 @@ export default function Puck({
     const isInvisible = powerup?.id === 'invisible' && !isLocalPlayer;
     const isGhost = powerup?.id === 'ghost';
     const hasShield = powerup?.id === 'shield';
-    
+
     // Speed check for trail
     const speed = Math.sqrt(
-        velocity.current[0] ** 2 + 
-        velocity.current[1] ** 2 + 
+        velocity.current[0] ** 2 +
+        velocity.current[1] ** 2 +
         velocity.current[2] ** 2
     );
 
+    // Initialize shader ref
+    const shaderRef = useRef();
+
+    useFrame((state) => {
+        if (shaderRef.current) {
+            shaderRef.current.time = state.clock.elapsedTime;
+        }
+    });
+
+    // Load Texture safely
+    const iconTexture = useTexture(iconPath || '/icons/Tier_1_Common/icon_1.png');
+
     if (isInvisible) return null;
+
+    // Determine Material Type
+    const isDivine = tier === 10;
+    const isCosmic = tier === 9;
+    const isLegendary = tier >= 6 && tier < 9;
+    const isMystery = iconPath && iconPath.includes('icon_150'); // Example logic for unique item
 
     return (
         <group>
             {/* Damage display */}
             {!isRespawning && (
-                <DamageDisplay 
-                    damage={damage} 
-                    position={position.current} 
+                <DamageDisplay
+                    damage={damage}
+                    position={position.current}
                     playerName={playerName}
                     color={color}
                 />
             )}
 
             {/* Ground indicator */}
-            <GroundIndicator 
+            <GroundIndicator
                 position={position.current}
                 color={color}
                 radius={effectiveRadius}
@@ -501,14 +739,14 @@ export default function Puck({
             />
 
             {/* Stomp target indicator */}
-            <StompIndicator 
+            <StompIndicator
                 active={!!stompTarget}
                 position={position.current}
             />
 
             {/* Motion trail */}
             {!isRespawning && speed > 5 && (
-                <PuckTrail 
+                <PuckTrail
                     positionsRef={trailPositions}
                     color={color}
                     active={true}
@@ -517,29 +755,48 @@ export default function Puck({
 
             {/* Shield effect */}
             {hasShield && !isRespawning && (
-                <ShieldEffect 
+                <ShieldEffect
                     position={position.current}
                     radius={effectiveRadius}
                 />
             )}
 
             {/* Main puck */}
-            <mesh 
-                ref={ref} 
-                castShadow 
+            <mesh
+                ref={ref}
+                castShadow
                 visible={!isRespawning}
                 scale={[puckScale, puckScale, puckScale]}
             >
                 <sphereGeometry args={[config.radius, 32, 32]} />
-                <meshStandardMaterial
-                    color={isFlashing ? '#ffffff' : color}
-                    metalness={0.7}
-                    roughness={0.2}
-                    emissive={isFlashing ? '#ffffff' : color}
-                    emissiveIntensity={isFlashing ? 2 : glowIntensity}
-                    transparent={isGhost}
-                    opacity={isGhost ? 0.4 : 1}
-                />
+
+                {/* Dynamic Material Selection */}
+                {isMystery ? (
+                    <mysteryMaterial ref={shaderRef} map={iconTexture} transparent />
+                ) : isDivine ? (
+                    <divineMaterial ref={shaderRef} map={iconTexture} transparent />
+                ) : isCosmic ? (
+                    <cosmicMaterial ref={shaderRef} map={iconTexture} transparent />
+                ) : isLegendary ? (
+                    <legendaryMaterial
+                        ref={shaderRef}
+                        map={iconTexture}
+                        color={new THREE.Color(color)}
+                        transparent
+                    />
+                ) : (
+                    // Standard Material for others
+                    <meshStandardMaterial
+                        map={iconTexture}
+                        color={isFlashing ? '#ffffff' : '#ffffff'} // Use white so texture shows true colors, or blend?
+                        metalness={0.7}
+                        roughness={0.2}
+                        emissive={isFlashing ? '#ffffff' : '#000000'}
+                        emissiveIntensity={isFlashing ? 2 : 0}
+                        transparent={isGhost}
+                        opacity={isGhost ? 0.4 : 1}
+                    />
+                )}
             </mesh>
         </group>
     );

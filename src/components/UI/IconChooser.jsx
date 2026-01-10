@@ -1,28 +1,8 @@
 import React from 'react';
-import { TIERS } from '../../utils/economy';
+import { TIERS, getAllIcons } from '../../utils/economy';
 
-// Generate all 150 icon slots across 10 tiers
-const ICON_SLOTS = Array.from({ length: 150 }, (_, i) => {
-    const iconNum = i + 1;
-    let tier;
-    if (iconNum <= 50) tier = 1;
-    else if (iconNum <= 80) tier = 2;
-    else if (iconNum <= 100) tier = 3;
-    else if (iconNum <= 115) tier = 4;
-    else if (iconNum <= 125) tier = 5;
-    else if (iconNum <= 133) tier = 6;
-    else if (iconNum <= 140) tier = 7;
-    else if (iconNum <= 145) tier = 8;
-    else if (iconNum <= 148) tier = 9;
-    else tier = 10;
-
-    return {
-        id: iconNum,
-        tier,
-        name: `Icon #${iconNum}`,
-        tierData: TIERS[tier]
-    };
-});
+// Get all 150 icons from the centralized database
+const ICON_SLOTS = getAllIcons().sort((a, b) => a.id - b.id);
 
 export default function IconChooser({ ownedIcons = [], onClose, onSelect }) {
     const groupedByTier = {};
@@ -71,7 +51,9 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect }) {
                                             >
                                                 {owned ? (
                                                     <>
-                                                        <div className="icon-visual">⭐</div>
+                                                        <div className="icon-visual">
+                                                            <img src={icon.imageUrl} alt={icon.name} className="icon-img" />
+                                                        </div>
                                                         <div className="icon-name">{icon.name}</div>
                                                     </>
                                                 ) : (
@@ -157,7 +139,16 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect }) {
                     opacity: 0.4; cursor: not-allowed;
                 }
 
-                .icon-visual { font-size: 1.8rem; }
+                .icon-visual { 
+                    font-size: 1.8rem; 
+                    width: 100%; height: 100%;
+                    display: flex; align-items: center; justify-content: center;
+                }
+                .icon-img {
+                    width: 90%; height: 90%;
+                    object-fit: contain;
+                    border-radius: 50%;
+                }
                 .locked-visual { color: #333; font-size: 1.5rem; }
                 .icon-name {
                     font-size: 0.55rem; color: #888; margin-top: 0.2rem;
