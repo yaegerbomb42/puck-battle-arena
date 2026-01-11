@@ -12,7 +12,7 @@ const TILE_HEIGHT = 0.5;
 // ============================================
 function FloorTile({ position, color, elevation = 0 }) {
     const y = elevation * TILE_HEIGHT - TILE_HEIGHT / 2;
-    
+
     const [ref] = useBox(() => ({
         type: 'Static',
         position: [position.x, y, position.z],
@@ -33,7 +33,7 @@ function FloorTile({ position, color, elevation = 0 }) {
 // ============================================
 function IceTile({ position, color, elevation = 0 }) {
     const y = elevation * TILE_HEIGHT - TILE_HEIGHT / 2;
-    
+
     const [ref] = useBox(() => ({
         type: 'Static',
         position: [position.x, y, position.z],
@@ -60,7 +60,7 @@ function IceTile({ position, color, elevation = 0 }) {
 // ============================================
 function LavaTile({ position, color }) {
     const meshRef = useRef();
-    
+
     useFrame((state) => {
         if (meshRef.current) {
             meshRef.current.material.emissiveIntensity = 1.5 + Math.sin(state.clock.elapsedTime * 3) * 0.5;
@@ -114,7 +114,7 @@ function RampTile({ position, rotation = 0, color, elevation = 0 }) {
 // ============================================
 function BumperTile({ position, color }) {
     const meshRef = useRef();
-    
+
     const [ref] = useSphere(() => ({
         type: 'Static',
         position: [position.x, TILE_HEIGHT, position.z],
@@ -178,7 +178,7 @@ function WallTile({ position, color }) {
 // ============================================
 function SpawnTile({ position, color }) {
     const ringRef = useRef();
-    
+
     useFrame((state) => {
         if (ringRef.current) {
             ringRef.current.rotation.z = state.clock.elapsedTime * 0.5;
@@ -209,7 +209,7 @@ function SpawnTile({ position, color }) {
 // ============================================
 function PowerupZoneTile({ position }) {
     const glowRef = useRef();
-    
+
     useFrame((state) => {
         if (glowRef.current) {
             glowRef.current.position.y = 0.3 + Math.sin(state.clock.elapsedTime * 2) * 0.1;
@@ -242,7 +242,7 @@ function PowerupZoneTile({ position }) {
 // ============================================
 function BoostPadTile({ position, color, rotation = 0 }) {
     const arrowRef = useRef();
-    
+
     const [ref] = useBox(() => ({
         type: 'Static',
         position: [position.x, -TILE_HEIGHT / 2, position.z],
@@ -282,7 +282,7 @@ function BoostPadTile({ position, color, rotation = 0 }) {
 // ============================================
 function SpringTile({ position, color }) {
     const springRef = useRef();
-    
+
     const [ref] = useBox(() => ({
         type: 'Static',
         position: [position.x, -TILE_HEIGHT / 2, position.z],
@@ -352,7 +352,7 @@ export default function ProceduralArena({ mapData }) {
             for (let x = 0; x < gridSize; x++) {
                 const tile = grid[z]?.[x];
                 if (!tile) continue;
-                
+
                 const worldPos = gridToWorld(x, z, gridSize, TILE_SIZE);
                 const key = `tile-${x}-${z}`;
                 const elevation = tile.elevation || 0;
@@ -400,14 +400,83 @@ export default function ProceduralArena({ mapData }) {
         return result;
     }, [mapData]);
 
+    // Generate decorative elements based on biome
+    const decorations = useMemo(() => {
+        if (!mapData?.biome) return null;
+
+        const { gridSize, biome } = mapData;
+        const arenaSize = gridSize * TILE_SIZE;
+        const halfSize = arenaSize / 2;
+        const colors = biome.colors;
+
+        const decorItems = [];
+
+        // Corner pillars
+        const corners = [
+            [-halfSize + 1.5, halfSize - 1.5],
+            [halfSize - 1.5, halfSize - 1.5],
+            [-halfSize + 1.5, -halfSize + 1.5],
+            [halfSize - 1.5, -halfSize + 1.5]
+        ];
+
+        corners.forEach(([x, z], i) => {
+            decorItems.push(
+                <group key={`pillar-${i}`} position={[x, 0, z]}>
+                    <mesh castShadow>
+                        <cylinderGeometry args={[0.4, 0.5, 4, 8]} />
+                        <meshStandardMaterial
+                            color={colors.secondary || colors.accent}
+                            metalness={0.7}
+                            roughness={0.3}
+                        />
+                    </mesh>
+                    {/* Pillar glow top */}
+                    <pointLight
+                        position={[0, 2.5, 0]}
+                        color={colors.glow || colors.accent}
+                        intensity={0.5}
+                        distance={8}
+                    />
+                </group>
+            );
+        });
+
+        // Edge glow strips
+        const edges = [
+            { pos: [0, -0.2, halfSize - 0.5], rot: [0, 0, 0], scale: [arenaSize - 3, 0.1, 0.3] },
+            { pos: [0, -0.2, -halfSize + 0.5], rot: [0, 0, 0], scale: [arenaSize - 3, 0.1, 0.3] },
+            { pos: [halfSize - 0.5, -0.2, 0], rot: [0, Math.PI / 2, 0], scale: [arenaSize - 3, 0.1, 0.3] },
+            { pos: [-halfSize + 0.5, -0.2, 0], rot: [0, Math.PI / 2, 0], scale: [arenaSize - 3, 0.1, 0.3] }
+        ];
+
+        edges.forEach((edge, i) => {
+            decorItems.push(
+                <mesh key={`edge-${i}`} position={edge.pos} rotation={edge.rot}>
+                    <boxGeometry args={edge.scale} />
+                    <meshStandardMaterial
+                        color={colors.accent}
+                        emissive={colors.accent}
+                        emissiveIntensity={0.4}
+                        transparent
+                        opacity={0.6}
+                    />
+                </mesh>
+            );
+        });
+
+        return decorItems;
+    }, [mapData]);
+
     if (!mapData) return null;
 
     const fog = mapData.biome?.fog;
+    const biome = mapData.biome;
 
     return (
         <group>
             {tiles}
-            
+            {decorations}
+
             {/* Biome-specific lighting */}
             <ambientLight intensity={0.4} />
             <directionalLight
@@ -421,7 +490,15 @@ export default function ProceduralArena({ mapData }) {
                 shadow-camera-top={30}
                 shadow-camera-bottom={-30}
             />
-            
+
+            {/* Secondary accent light */}
+            <pointLight
+                position={[0, 10, 0]}
+                color={biome?.colors?.glow || '#ffffff'}
+                intensity={0.3}
+                distance={50}
+            />
+
             {/* Fog from biome */}
             {fog && <fog attach="fog" args={[fog.color, fog.near, fog.far]} />}
         </group>

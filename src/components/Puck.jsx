@@ -789,7 +789,7 @@ export default function Puck({
                     <meshStandardMaterial
                         color={color}
                         emissive={color}
-                        emissiveIntensity={1.5 + Math.sin(Date.now() * 0.005) * 0.5}
+                        emissiveIntensity={1.5}
                     />
                 </mesh>
 

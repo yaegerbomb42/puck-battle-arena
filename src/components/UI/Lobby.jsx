@@ -25,7 +25,7 @@ export default function Lobby({
     selectedMap,
     mapVotes
 }) {
-    const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, equipSkin } = useAuth();
+    const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, equipSkin, updateLoadout, setActiveLoadout } = useAuth();
 
     const [showStore, setShowStore] = useState(false);
     const [showLoadout, setShowLoadout] = useState(false);
@@ -86,9 +86,14 @@ export default function Lobby({
 
             {showLoadout && (
                 <LoadoutMenu
-                    equipped={inventory?.loadouts?.[0] || DEFAULT_LOADOUT}
-                    onEquip={(newLoadout) => {
-                        // For now we just update slot 0
+                    equipped={inventory?.loadouts?.[inventory?.activeLoadout || 0] || DEFAULT_LOADOUT}
+                    loadoutSlot={inventory?.activeLoadout || 0}
+                    allLoadouts={inventory?.loadouts || [DEFAULT_LOADOUT, DEFAULT_LOADOUT, DEFAULT_LOADOUT]}
+                    onEquip={(newLoadout, slot) => {
+                        updateLoadout(slot ?? inventory?.activeLoadout ?? 0, newLoadout);
+                    }}
+                    onSwitchSlot={(slot) => {
+                        setActiveLoadout(slot);
                     }}
                     onClose={() => setShowLoadout(false)}
                 />
@@ -167,7 +172,6 @@ export default function Lobby({
                 </div>
 
                 <div className="logo-container">
-                    <img src="/images/logo.png" alt="puckOFF Logo" className="logo-img" />
                     <h1 className="game-title">puck<span>OFF</span></h1>
                 </div>
                 <p className="game-subtitle">The Ultimate Physics-Based Arena Combat. Smash. Collect. puck<span>OFF</span>.</p>
@@ -319,14 +323,22 @@ export default function Lobby({
             <style jsx>{`
                 .lobby-overlay {
                     position: fixed; inset: 0;
-                    background: linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 50%, #0a1a2e 100%);
+                    background: url('/images/lobby_background.png') center center / cover no-repeat;
                     display: flex; align-items: center; justify-content: center;
                     font-family: 'Orbitron', 'Inter', sans-serif;
                     color: white;
                     z-index: 100;
                 }
+                .lobby-overlay::before {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    background: linear-gradient(135deg, rgba(10,10,26,0.85) 0%, rgba(26,10,46,0.8) 50%, rgba(10,26,46,0.85) 100%);
+                    pointer-events: none;
+                }
                 .lobby-container {
                     text-align: center; width: 100%; max-width: 500px; padding: 2rem;
+                    position: relative; z-index: 1;
                 }
 
                 /* User Bar */

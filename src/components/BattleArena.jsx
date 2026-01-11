@@ -27,6 +27,8 @@ import {
 } from '../utils/physics';
 import { getPowerupInfo, DEFAULT_LOADOUT } from '../utils/powerups';
 import { generateMap } from '../utils/mapGenerator';
+import { analytics } from '../utils/analytics';
+import ReplayPlayer, { useReplayRecorder } from './ReplaySystem';
 
 // ============================================
 // GAME MODE CONFIGURATIONS
@@ -205,6 +207,14 @@ export default function BattleArena() {
     });
     const [combo, setCombo] = useState(0);
     const lastHitTime = useRef(0);
+
+    // Replay system
+    const replayRecorder = useReplayRecorder();
+    const [activeReplay, setActiveReplay] = useState(null);
+    const [showReplay, setShowReplay] = useState(false);
+
+    // FPS tracking
+    const fpsRef = useRef(0);
 
     // Effect ID counter - FIX: Single atomic counter
     const nextIdRef = useRef(0);
@@ -483,6 +493,17 @@ export default function BattleArena() {
         setPlayerDamage(prev => ({ ...prev, [knockedOutPlayerId]: 0 }));
         setMatchStats(s => ({ ...s, knockouts: s.knockouts + 1 }));
 
+        // Analytics tracking
+        analytics.trackKnockout(knockedOutPlayerId, multiplayer.playerId, 'knockout');
+
+        // Capture replay
+        const replay = replayRecorder.captureReplay(Date.now());
+        if (replay.frames.length > 0) {
+            setActiveReplay(replay);
+            // Show replay after slowmo
+            setTimeout(() => setShowReplay(true), 1500);
+        }
+
         setKnockoutMessage('KNOCKOUT!');
         setTimeout(() => {
             setKnockoutMessage(null);
@@ -493,7 +514,7 @@ export default function BattleArena() {
         if (multiplayer.connected) {
             multiplayer.reportKnockout?.(knockedOutPlayerId);
         }
-    }, [playerPositions, multiplayer, modeConfig.stocksPerPlayer, getNextId, checkWinCondition]);
+    }, [playerPositions, multiplayer, modeConfig.stocksPerPlayer, getNextId, checkWinCondition, replayRecorder]);
 
     // ========== POSITION UPDATE ==========
     const handlePositionUpdate = useCallback((position, velocity) => {
@@ -765,6 +786,18 @@ export default function BattleArena() {
                     lastHitTime={lastHitTime.current}
                     players={multiplayer.players}
                     localPlayerId={multiplayer.playerId}
+                    fps={fpsRef.current}
+                />
+            )}
+
+            {/* Replay Killcam */}
+            {showReplay && activeReplay && (
+                <ReplayPlayer
+                    replay={activeReplay}
+                    onClose={() => {
+                        setShowReplay(false);
+                        setActiveReplay(null);
+                    }}
                 />
             )}
 

@@ -1,15 +1,29 @@
 import React, { useState } from 'react';
 import { POWERUP_REGISTRY, getPowerupInfo, DEFAULT_LOADOUT } from '../../utils/powerups';
+import { audio } from '../../utils/audio';
 
-export default function LoadoutMenu({ equipped = DEFAULT_LOADOUT, onEquip, onClose }) {
+export default function LoadoutMenu({
+    equipped = DEFAULT_LOADOUT,
+    loadoutSlot = 0,
+    allLoadouts = [DEFAULT_LOADOUT, DEFAULT_LOADOUT, DEFAULT_LOADOUT],
+    onEquip,
+    onSwitchSlot,
+    onClose
+}) {
     const [selectedSlot, setSelectedSlot] = useState(0);
 
     const handleSelectPowerup = (id) => {
+        audio.playClick();
         const newLoadout = [...equipped];
         newLoadout[selectedSlot] = id;
-        onEquip(newLoadout);
+        onEquip(newLoadout, loadoutSlot);
         // Auto-advance to next slot
         if (selectedSlot < 2) setSelectedSlot(selectedSlot + 1);
+    };
+
+    const handleSwitchLoadoutSlot = (slot) => {
+        audio.playClick();
+        onSwitchSlot?.(slot);
     };
 
     const powerupList = Object.values(POWERUP_REGISTRY);
@@ -33,6 +47,19 @@ export default function LoadoutMenu({ equipped = DEFAULT_LOADOUT, onEquip, onClo
                         </p>
                     </div>
                     <button className="close-btn" onClick={onClose}>✓ CONFIRM</button>
+                </div>
+
+                {/* Loadout Slot Selector */}
+                <div className="loadout-tabs">
+                    {[0, 1, 2].map((slot) => (
+                        <button
+                            key={slot}
+                            className={`loadout-tab ${loadoutSlot === slot ? 'active' : ''}`}
+                            onClick={() => handleSwitchLoadoutSlot(slot)}
+                        >
+                            Loadout {slot + 1}
+                        </button>
+                    ))}
                 </div>
 
                 <div className="slots-section">
@@ -218,6 +245,34 @@ export default function LoadoutMenu({ equipped = DEFAULT_LOADOUT, onEquip, onClo
                 .powerup-grid-container::-webkit-scrollbar { width: 6px; }
                 .powerup-grid-container::-webkit-scrollbar-track { background: #111; }
                 .powerup-grid-container::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+                /* Loadout Tabs */
+                .loadout-tabs {
+                    display: flex;
+                    gap: 0.5rem;
+                    margin-bottom: 1rem;
+                    justify-content: center;
+                }
+                .loadout-tab {
+                    padding: 0.5rem 1rem;
+                    background: rgba(255,255,255,0.05);
+                    border: 1px solid #333;
+                    border-radius: 20px;
+                    color: #888;
+                    cursor: pointer;
+                    font-family: inherit;
+                    font-size: 0.8rem;
+                    transition: all 0.2s;
+                }
+                .loadout-tab:hover {
+                    background: rgba(255,255,255,0.1);
+                    color: #fff;
+                }
+                .loadout-tab.active {
+                    background: linear-gradient(135deg, #00d4ff33, #ff006e33);
+                    border-color: #00d4ff;
+                    color: #00d4ff;
+                }
             `}</style>
         </div>
     );

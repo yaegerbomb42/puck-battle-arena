@@ -161,7 +161,7 @@ export function getMaskedIcon(icon, playerInventory) {
             isMasked: true,
             name: '???',
             description: 'Mystery item. Pull from a pack to reveal!',
-            imageUrl: '/icons/mystery_placeholder.png'
+            imageUrl: '/images/mystery_icon.png'
         };
     }
     return { ...icon, isMasked: false };
