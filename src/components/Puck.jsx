@@ -5,6 +5,7 @@ import { Text, Billboard, useTexture, shaderMaterial } from '@react-three/drei';
 import * as THREE from 'three';
 import { PHYSICS_CONFIG, isInKnockoutZone, canStomp, calculateStompDamage } from '../utils/physics';
 import { audio } from '../utils/audio';
+import useGamepad from '../hooks/useGamepad';
 
 // ============================================
 // LEGENDARY SHADER MATERIAL
@@ -453,6 +454,14 @@ export default function Puck({
         lastJumpTime: 0
     });
 
+    // GAMEPAD SUPPORT
+    const gamepad = useGamepad();
+    const gamepadButtonState = useRef({
+        jumpHeld: false,
+        dashHeld: false,
+        itemHeld: false
+    });
+
     const [invincible, setInvincible] = useState(false);
 
     // Notify parent of invincibility state changes
@@ -597,7 +606,33 @@ export default function Puck({
             let forceX = 0;
             let forceZ = 0;
 
-            // WASD / Arrow movement
+            // GAMEPAD INPUT (via useGamepad hook)
+            const gamepadInput = gamepad.poll();
+            if (gamepad.connected) {
+                forceX = gamepadInput.moveX;
+                forceZ = gamepadInput.moveY; // Note: Y axis is inverted for "forward"
+
+                // Gamepad buttons
+                if (gamepadInput.jump && !gamepadButtonState.current.jumpHeld) {
+                    inputState.current.spacePressed = true;
+                    gamepadButtonState.current.jumpHeld = true;
+                }
+                if (!gamepadInput.jump) gamepadButtonState.current.jumpHeld = false;
+
+                if (gamepadInput.dash && !gamepadButtonState.current.dashHeld) {
+                    inputState.current.dashPressed = true;
+                    gamepadButtonState.current.dashHeld = true;
+                }
+                if (!gamepadInput.dash) gamepadButtonState.current.dashHeld = false;
+
+                if (gamepadInput.useItem && !gamepadButtonState.current.itemHeld) {
+                    onUseItem?.();
+                    gamepadButtonState.current.itemHeld = true;
+                }
+                if (!gamepadInput.useItem) gamepadButtonState.current.itemHeld = false;
+            }
+
+            // KEYBOARD: WASD / Arrow movement (merged with gamepad)
             if (keys['KeyW'] || keys['ArrowUp']) forceZ -= 1;
             if (keys['KeyS'] || keys['ArrowDown']) forceZ += 1;
             if (keys['KeyA'] || keys['ArrowLeft']) forceX -= 1;

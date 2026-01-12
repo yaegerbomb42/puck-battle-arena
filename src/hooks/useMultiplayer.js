@@ -26,6 +26,10 @@ export function useMultiplayer() {
     const [isOffline, setIsOffline] = useState(false);
     const [connectionError, setConnectionError] = useState(null);
 
+    // Spectator Mode
+    const [isSpectating, setIsSpectating] = useState(false);
+    const [spectatorRoomId, setSpectatorRoomId] = useState(null);
+
     // Event handlers ref
     const handlersRef = useRef({});
 
@@ -285,11 +289,18 @@ export function useMultiplayer() {
         }
         if (!socket) return;
 
-        // Optimistic update (partial, waiting for server vote count)
-        setMapVotes(prev => ({
-            ...prev,
-            [playerId]: mapName // Placeholder, actual structure depends on server
-        }));
+        // Update vote tracking: { mapName: [voterId1, voterId2, ...] }
+        setMapVotes(prev => {
+            const newVotes = { ...prev };
+            // Remove previous vote from this player
+            Object.keys(newVotes).forEach(map => {
+                newVotes[map] = (newVotes[map] || []).filter(id => id !== playerId);
+            });
+            // Add new vote
+            if (!newVotes[mapName]) newVotes[mapName] = [];
+            newVotes[mapName].push(playerId);
+            return newVotes;
+        });
 
         socket.emit('voteMap', { mapName });
     }, [socket, isOffline, playerId]);
@@ -301,6 +312,22 @@ export function useMultiplayer() {
         setSelectedMode(mode);
 
         socket.emit('selectMode', { mode });
+    }, [socket]);
+
+    // ========== SPECTATOR MODE ==========
+    const joinAsSpectator = useCallback((roomId) => {
+        if (!socket) return;
+        setSpectatorRoomId(roomId);
+        setIsSpectating(true);
+        socket.emit('joinSpectator', { roomId });
+    }, [socket]);
+
+    const exitSpectator = useCallback(() => {
+        if (socket) {
+            socket.emit('leaveSpectator');
+        }
+        setIsSpectating(false);
+        setSpectatorRoomId(null);
     }, [socket]);
 
     // ========== GAME SETUP ACTIONS ==========
@@ -384,6 +411,12 @@ export function useMultiplayer() {
         connectionError,
         isOffline,
         enableOfflineMode,
+
+        // Spectator Mode
+        isSpectating,
+        spectatorRoomId,
+        joinAsSpectator,
+        exitSpectator,
 
         // Room actions
         createRoom,
