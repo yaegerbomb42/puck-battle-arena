@@ -2,7 +2,7 @@ name: Keep Render Alive
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Run every 5 minutes
+    - cron: '*/14 * * * *' # Run every 14 minutes (Render spins down after 15 min inactivity)
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -11,4 +11,6 @@ jobs:
     steps:
       - name: Ping Render Service
         run: |
-          curl -I https://puck-battle-arena-server.onrender.com/ping || echo "Ping failed"
+          echo "Pinging backend at $(date)"
+          curl -sf https://puck-battle-arena-backend.onrender.com/ping || curl -sf https://puck-battle-arena-backend.onrender.com/ || echo "Ping failed, but continuing"
+          echo "Ping completed"
