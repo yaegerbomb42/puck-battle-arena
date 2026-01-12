@@ -1,6 +1,7 @@
 import React, { useMemo, useRef } from 'react';
 import { useBox, useSphere } from '@react-three/cannon';
 import { useFrame } from '@react-three/fiber';
+import { MeshReflectorMaterial, Float } from '@react-three/drei';
 import * as THREE from 'three';
 import { TILE_TYPES, gridToWorld } from '../utils/mapGenerator';
 
@@ -48,7 +49,7 @@ function IceTile({ position, color, elevation = 0 }) {
         type: 'Static',
         position: [position.x, y, position.z],
         args: [TILE_SIZE, TILE_HEIGHT, TILE_SIZE],
-        material: { friction: 0.02, restitution: 0.6 }
+        material: { friction: 0.05, restitution: 0.5 } // Slick but playable
     }));
 
     return (
@@ -386,33 +387,79 @@ function ArenaDecorations() {
                     <meshStandardMaterial color="#111" roughness={0.9} />
                 </mesh>
             ))}
-            <gridHelper args={[200, 50, '#222', '#111']} position={[0, -2, 0]} />
         </group>
     );
 }
 
 // ============================================
-// ANIMATED LAVA (Step 27)
+// STADIUM DOME (Rocket League Style)
 // ============================================
-function AnimatedLava() {
-    // Basic animated lava plane without texture asset dependency
-    const materialRef = useRef();
-
-    useFrame((state) => {
-        if (materialRef.current) {
-            materialRef.current.emissiveIntensity = 1.2 + Math.sin(state.clock.elapsedTime * 2) * 0.4;
-        }
-    });
-
+function StadiumDome({ biome }) {
     return (
-        <mesh position={[0, -5, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <group>
+            {/* Hexagon Cage Structure */}
+            <mesh scale={[120, 80, 120]} position={[0, 20, 0]}>
+                <sphereGeometry args={[1, 32, 16]} />
+                <meshBasicMaterial
+                    color={biome?.colors?.accent || '#00d4ff'}
+                    wireframe
+                    transparent
+                    opacity={0.15}
+                    side={THREE.BackSide}
+                />
+            </mesh>
+
+            {/* Giant Glowing Rings */}
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -5, 0]}>
+                <ringGeometry args={[118, 120, 64]} />
+                <meshStandardMaterial
+                    color={biome?.colors?.hazard || '#ff006e'}
+                    emissive={biome?.colors?.hazard || '#ff006e'}
+                    emissiveIntensity={4}
+                    toneMapped={false}
+                />
+            </mesh>
+
+            {/* Floating Crowd / Lights placeholder */}
+            <Float speed={5} rotationIntensity={0.2} floatIntensity={0.5} floatingRange={[20, 30]}>
+                <group position={[0, 0, 0]}>
+                    <pointLight position={[0, 50, 0]} intensity={1.5} color={biome?.colors?.accent} distance={200} />
+                    {[...Array(12)].map((_, i) => (
+                        <mesh key={i} position={[
+                            Math.sin(i / 12 * Math.PI * 2) * 70,
+                            35 + Math.sin(i) * 5,
+                            Math.cos(i / 12 * Math.PI * 2) * 70
+                        ]}>
+                            <sphereGeometry args={[1, 8, 8]} />
+                            <meshBasicMaterial color={biome?.colors?.glow || '#fff'} />
+                        </mesh>
+                    ))}
+                </group>
+            </Float>
+        </group>
+    );
+}
+
+// ============================================
+// REFLECTIVE ARENA BASE (Rocket League Floor)
+// ============================================
+function ReflectiveBase({ color }) {
+    // A single giant reflective plane beneath the tiles to unify the scene
+    return (
+        <mesh position={[0, -0.6, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <planeGeometry args={[300, 300]} />
-            <meshStandardMaterial
-                ref={materialRef}
-                color="#ff3300"
-                emissive="#ff0000"
-                emissiveIntensity={1.2}
-                roughness={0.8}
+            <MeshReflectorMaterial
+                blur={[100, 100]} // Reduced blur heavily
+                resolution={512}  // Halved resolution
+                mixBlur={0.2}     // Less complex mixing
+                mixStrength={10}  // Subtle reflection
+                roughness={0.5}
+                depthScale={1}
+                minDepthThreshold={0.5}
+                maxDepthThreshold={1.4}
+                color={color || "#151515"}
+                metalness={0.5}
+                mirror={0.5}      // Explicit mirror prop
             />
         </mesh>
     );
@@ -478,7 +525,7 @@ export default function ProceduralArena({ mapData }) {
         return result;
     }, [mapData]);
 
-    // Generate decorative elements based on biome
+    // Generate decorative elements based on biome (Legacy, can be reduced/removed if StadiumDome is enough)
     const decorations = useMemo(() => {
         if (!mapData?.biome) return null;
 
@@ -547,15 +594,16 @@ export default function ProceduralArena({ mapData }) {
 
     if (!mapData) return null;
 
-    const fog = mapData.biome?.fog;
     const biome = mapData.biome;
 
     return (
         <group>
             {tiles}
             {decorations}
+
             <ArenaDecorations />
-            <AnimatedLava />
+            <StadiumDome biome={biome} />
+            <ReflectiveBase color={biome?.colors?.floor} />
 
             {/* Note: Main lighting is now handled by GameScene for better global control.
                 Only simple biome accent light remains here. */}

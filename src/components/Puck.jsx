@@ -735,9 +735,8 @@ export default function Puck({
             if (!isRespawning) {
                 if (isInKnockoutZone(position.current)) {
                     handleKnockout();
-                } else if (position.current[1] < -30) {
-                    // Safety net for physics glitch
-                    console.warn("Player fell out of bounds (Safety Net)");
+                } else if (position.current[1] < -4) {
+                    // Quick death for pits (Y < -4)
                     handleKnockout();
                 }
             }

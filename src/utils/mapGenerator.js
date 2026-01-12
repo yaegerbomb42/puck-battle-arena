@@ -235,6 +235,31 @@ function generateElevationMap(rng, gridSize) {
     return elevation;
 }
 
+// Map Layout Templates
+const LAYOUTS = {
+    STANDARD: (x, z, size) => true,
+    DONUT: (x, z, size) => {
+        const d = Math.sqrt((x - size / 2) ** 2 + (z - size / 2) ** 2);
+        return d > size * 0.2 && d < size * 0.45;
+    },
+    HOURGLASS: (x, z, size) => {
+        // y = x and y = -x diagonals
+        const dx = Math.abs(x - size / 2);
+        const dz = Math.abs(z - size / 2);
+        return dx > dz * 0.5 || dx < 2; // Wide ends, narrow middle
+    },
+    X_FACTOR: (x, z, size) => {
+        const dx = Math.abs(x - size / 2);
+        const dz = Math.abs(z - size / 2);
+        return dx < size * 0.15 || dz < size * 0.15;
+    },
+    DUAL_ISLANDS: (x, z, size) => {
+        const dz = Math.abs(z - size / 2); // Split along Z axis
+        const isBridge = Math.abs(x - size / 2) < 2;
+        return dz > 2 || isBridge;
+    }
+};
+
 // Main generation function
 export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId = null) {
     const rng = createRNG(seed);
@@ -250,6 +275,11 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
         biome = BIOMES[biomeKeys[Math.floor(rng() * biomeKeys.length)]];
     }
 
+    // Select Layout
+    const layoutKeys = Object.keys(LAYOUTS);
+    const layoutName = layoutKeys[Math.floor(rng() * layoutKeys.length)];
+    const isPointValid = LAYOUTS[layoutName] || LAYOUTS.STANDARD;
+
     // Initialize grid
     const elevationMap = generateElevationMap(rng, gridSize);
     const grid = [];
@@ -257,8 +287,14 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
     for (let z = 0; z < gridSize; z++) {
         const row = [];
         for (let x = 0; x < gridSize; x++) {
+            // Apply Layout Mask
+            let type = TILE_TYPES.FLOOR;
+            if (!isPointValid(x, z, gridSize)) {
+                type = TILE_TYPES.PIT; // Or Wall
+            }
+
             row.push({
-                type: TILE_TYPES.FLOOR,
+                type,
                 x, z,
                 elevation: elevationMap[z][x],
                 rotation: 0
@@ -276,6 +312,25 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
     ];
 
     spawns.forEach(s => {
+        // If the preferred spawn is a PIT/VOID, find the nearest valid floor
+        if (grid[s.z]?.[s.x]?.type === TILE_TYPES.PIT || !grid[s.z]?.[s.x]) {
+            // Spiral search for valid ground
+            let found = false;
+            for (let r = 1; r < 4; r++) {
+                if (found) break;
+                for (let dz = -r; dz <= r; dz++) {
+                    for (let dx = -r; dx <= r; dx++) {
+                        if (grid[s.z + dz]?.[s.x + dx]?.type === TILE_TYPES.FLOOR) {
+                            s.x += dx;
+                            s.z += dz;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         if (grid[s.z]?.[s.x]) {
             grid[s.z][s.x].type = TILE_TYPES.SPAWN;
             grid[s.z][s.x].elevation = 0;
@@ -291,7 +346,9 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
 
     powerupZones.forEach(p => {
         if (grid[p.z]?.[p.x]) {
-            grid[p.z][p.x].type = TILE_TYPES.POWERUP_ZONE;
+            if (grid[p.z][p.x].type !== TILE_TYPES.PIT) {
+                grid[p.z][p.x].type = TILE_TYPES.POWERUP_ZONE;
+            }
         }
     });
 
@@ -299,9 +356,11 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
     for (let z = 0; z < gridSize; z++) {
         for (let x = 0; x < gridSize; x++) {
             const tile = grid[z][x];
+
+            // Skip non-floor (Pits from layout)
             if (tile.type !== TILE_TYPES.FLOOR) continue;
 
-            // Edge walls
+            // Edge walls (only if not already a pit)
             if (x === 0 || x === gridSize - 1 || z === 0 || z === gridSize - 1) {
                 tile.type = TILE_TYPES.WALL;
                 continue;
@@ -341,6 +400,7 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
             const mirror = grid[mirrorZ]?.[mirrorX];
 
             if (!mirror) continue;
+            // Respect layout pits
             if (original.type === TILE_TYPES.SPAWN || original.type === TILE_TYPES.POWERUP_ZONE) continue;
             if (mirror.type === TILE_TYPES.SPAWN || mirror.type === TILE_TYPES.POWERUP_ZONE) continue;
 
@@ -349,10 +409,14 @@ export function generateMap(seed, gridSize = 12, chaosLevel = 0.5, forcedBiomeId
         }
     }
 
+    // Ensure connectivity
+    // If layout breaks connectivity, validateMap will retry, so we don't need complex patches here.
+
     return {
         seed,
         gridSize,
         biome,
+        layout: layoutName, // Return layout name for UI/Debug
         grid,
         spawns,
         powerupZones,
