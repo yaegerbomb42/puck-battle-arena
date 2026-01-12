@@ -8,6 +8,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, increment, arrayUnion } from 'firebase/firestore';
 import { auth, googleProvider, db } from '../firebase';
+import { getLevelFromXp, XP_WIN_BONUS, XP_KNOCKOUT, XP_STOMP } from '../utils/leveling';
 
 const AuthContext = createContext();
 
@@ -27,6 +28,8 @@ const DEFAULT_INVENTORY = {
     packCredits: 0,
     banUntil: null,
     consecutiveQuits: 0,
+    xp: 0, // [NEW] Experience Points
+    timePlayed: 0, // [NEW] Total minutes played
     loadouts: [
         ['speed_boost', 'rocket', 'shield'],
         ['teleport', 'bomb_throw', 'ghost'],
@@ -320,6 +323,99 @@ export function AuthProvider({ children }) {
         }
     }, [user, inventory.stats.highestCombo]);
 
+    // ========== XP & PROGRESSION ==========
+
+    const addXp = useCallback(async (amount) => {
+        if (!user || amount <= 0) return;
+        try {
+            await updateDoc(doc(db, 'users', user.uid), {
+                xp: increment(amount)
+            });
+            setInventory(prev => ({ ...prev, xp: (prev.xp || 0) + amount }));
+        } catch (error) {
+            console.error('Error adding XP:', error);
+        }
+    }, [user]);
+
+    // Update time played every minute if user is active (simple implementation)
+    useEffect(() => {
+        if (!user) return;
+        const interval = setInterval(async () => {
+            // We could check document.hidden here to only count active time
+            if (document.hidden) return;
+
+            try {
+                // Add 1 minute to timePlayed and appropriate XP
+                const xpAmount = 100; // 100 XP per minute
+                await updateDoc(doc(db, 'users', user.uid), {
+                    timePlayed: increment(1),
+                    xp: increment(xpAmount)
+                });
+                setInventory(prev => ({
+                    ...prev,
+                    timePlayed: (prev.timePlayed || 0) + 1,
+                    xp: (prev.xp || 0) + xpAmount
+                }));
+            } catch (err) {
+                console.error("Error updating playtime:", err);
+            }
+        }, 60000); // Every 60 seconds
+
+        return () => clearInterval(interval);
+    }, [user]);
+
+    // Wrap updateMatchStats to include XP calculation
+    const updateMatchStatsWithXp = useCallback(async (matchResult) => {
+        if (!user) return;
+
+        const { won, knockouts, damageDealt, stomps, maxCombo } = matchResult;
+
+        // Calculate XP Rewards
+        let xpEarned = 0;
+        if (won) xpEarned += XP_WIN_BONUS;
+        xpEarned += (knockouts || 0) * XP_KNOCKOUT;
+        xpEarned += (stomps || 0) * XP_STOMP;
+
+        try {
+            const creditsEarned = won ? 3 : 2;
+
+            // Perform single atomic update for Stats + Credits + XP + Playtime(optional but good practice)
+            await updateDoc(doc(db, 'users', user.uid), {
+                'stats.gamesPlayed': increment(1),
+                'stats.wins': increment(won ? 1 : 0),
+                'stats.knockouts': increment(knockouts || 0),
+                'stats.damageDealt': increment(Math.floor(damageDealt || 0)),
+                'stats.stomps': increment(stomps || 0),
+                'stats.highestCombo': Math.max(inventory.stats.highestCombo, maxCombo || 0),
+                credits: increment(creditsEarned),
+                consecutiveQuits: 0,
+                // Add XP atomically
+                xp: increment(xpEarned)
+            });
+
+            setInventory(prev => ({
+                ...prev,
+                credits: (prev.credits || 0) + creditsEarned,
+                consecutiveQuits: 0,
+                xp: (prev.xp || 0) + xpEarned,
+                stats: {
+                    ...prev.stats,
+                    gamesPlayed: prev.stats.gamesPlayed + 1,
+                    wins: prev.stats.wins + (won ? 1 : 0),
+                    knockouts: prev.stats.knockouts + (knockouts || 0),
+                    damageDealt: prev.stats.damageDealt + Math.floor(damageDealt || 0),
+                    stomps: prev.stats.stomps + (stomps || 0),
+                    highestCombo: Math.max(prev.stats.highestCombo, maxCombo || 0)
+                }
+            }));
+
+            return { creditsEarned, xpEarned };
+        } catch (error) {
+            console.error('Error updating match stats:', error);
+            return null;
+        }
+    }, [user, inventory.stats.highestCombo]);
+
     // ========== ACHIEVEMENTS ==========
 
     const unlockAchievement = useCallback(async (achievementId) => {
@@ -389,8 +485,11 @@ export function AuthProvider({ children }) {
         setActiveLoadout,
 
         // Stats
-        updateMatchStats,
+        updateMatchStats: updateMatchStatsWithXp, // Use the wrapper
         unlockAchievement,
+
+        // Progression
+        addXp,
 
         // Admin
         resetInventory,

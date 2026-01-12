@@ -749,9 +749,9 @@ export default function BattleArena() {
         if (multiplayer.roomCode === 'sandbox' && multiplayer.gameState === 'playing') {
             return (
                 <>
-                    {/* Minimal HUD for Sandbox */}
+                    {/* Minimal HUD for Free Play */}
                     <div style={{ position: 'absolute', top: 20, left: 20, color: 'white', zIndex: 10 }}>
-                        <h2>🧪 SANDBOX MODE</h2>
+                        <h2>🧪 FREE PLAY</h2>
                         <p style={{ opacity: 0.7 }}>Experiment with physics and powerups</p>
                     </div>
 

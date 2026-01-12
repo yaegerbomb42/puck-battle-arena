@@ -11,6 +11,7 @@ import { audio } from '../../utils/audio';
 
 import { getBiomeList } from '../../utils/mapGenerator';
 import { GAME_MODES } from '../../utils/gameModes';
+import { getLevelFromXp, getLevelProgress, getRankName, LEVEL_CAP } from '../../utils/leveling';
 
 export default function Lobby({
     connected,
@@ -223,9 +224,21 @@ export default function Lobby({
                         {/* NEW: Profile Integration in Name Input */}
                         <div className="name-input-container">
                             {user ? (
-                                <div className="logged-in-badge">
-                                    <span className="status-dot"></span>
-                                    LOGGED IN AS
+                                <div className="player-progression">
+                                    <div className="logged-in-badge">
+                                        <span className="status-dot"></span>
+                                        LOGGED IN AS
+                                    </div>
+                                    <div className="level-badge">
+                                        <div className="level-number">{getLevelFromXp(inventory?.xp || 0)}</div>
+                                        <div className="rank-name">{getRankName(getLevelFromXp(inventory?.xp || 0))}</div>
+                                    </div>
+                                    <div className="xp-bar-container" title={`XP: ${inventory?.xp || 0}`}>
+                                        <div
+                                            className="xp-bar-fill"
+                                            style={{ width: `${getLevelProgress(inventory?.xp || 0) * 100}%` }}
+                                        />
+                                    </div>
                                 </div>
                             ) : (
                                 <button className="btn-text-link" onClick={() => setShowAuthModal(true)}>
@@ -660,6 +673,31 @@ export default function Lobby({
 
                 /* Room View */
                 .room-view { width: 100%; }
+                
+                /* Progression Logic */
+                .player-progression {
+                    display: flex; flex-direction: column; align-items: start; gap: 0.2rem; margin-bottom: 0.5rem; width: 100%;
+                }
+                .level-badge {
+                    display: flex; align-items: center; gap: 0.5rem;
+                    color: gold; font-weight: bold; font-size: 0.9rem;
+                    text-transform: uppercase; letter-spacing: 1px;
+                }
+                .level-number {
+                    background: gold; color: black; width: 24px; height: 24px;
+                    display: flex; align-items: center; justify-content: center;
+                    border-radius: 50%; font-size: 0.8rem;
+                }
+                .xp-bar-container {
+                    width: 100%; height: 6px; background: rgba(255,255,255,0.1);
+                    border-radius: 3px; overflow: hidden;
+                    margin-top: 2px;
+                }
+                .xp-bar-fill {
+                    height: 100%; background: linear-gradient(90deg, #ffd700, #ffaa00);
+                    transition: width 0.5s ease-out;
+                }
+
                 .room-code { 
                     font-size: 3rem; font-weight: bold; color: #00d4ff;
                     letter-spacing: 0.5rem; margin: 1rem 0;
