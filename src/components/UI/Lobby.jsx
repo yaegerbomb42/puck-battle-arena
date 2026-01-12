@@ -486,18 +486,91 @@ export default function Lobby({
 
                 .cosmetics-row { 
                     display: flex; gap: 1rem; margin-top: 1rem; 
-                    width: 100%; max-width: 350px;
+                    width: 100%; max-width: 400px;
+                    align-items: center;
+                    overflow: hidden;
                 }
                 .btn-store { 
-                    flex: 1; background: linear-gradient(135deg, #ffd700, #ff8c00); 
+                    width: 100px; background: linear-gradient(135deg, #ffd700, #ff8c00); 
                     color: #000; font-weight: bold; padding: 0.8rem;
-                    border-radius: 10px; border: none; cursor: pointer;
-                    font-size: 1rem;
+                    border-radius: 12px; border: none; cursor: pointer;
+                    font-size: 0.85rem; transition: transform 0.2s;
                 }
-                .skin-selector { flex: 1; }
-                .skin-selector select { 
-                    width: 100%; padding: 0.8rem; background: #222; 
-                    color: white; border: 1px solid #444; border-radius: 10px;
+                .btn-store:hover { transform: scale(1.05); }
+
+                .equipped-icon-preview {
+                    flex: 1;
+                    display: flex;
+                }
+
+                .btn-icon-select {
+                    width: 100%;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.8rem;
+                    padding: 0.5rem 1rem;
+                    background: rgba(0,0,0,0.4);
+                    border: 1px solid #444;
+                    border-radius: 12px;
+                    cursor: pointer;
+                    color: white;
+                    transition: all 0.2s;
+                }
+
+                .btn-icon-select:hover {
+                    background: rgba(255,255,255,0.05);
+                    border-color: #00d4ff;
+                    box-shadow: 0 0 15px rgba(0,212,255,0.2);
+                }
+
+                .current-icon {
+                    width: 48px;
+                    height: 48px;
+                    background: #111;
+                    border-radius: 8px;
+                    padding: 4px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    border: 1px solid #333;
+                    flex-shrink: 0;
+                }
+
+                .current-icon img {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
+                }
+
+                .icon-select-label {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: flex-start;
+                    font-size: 0.75rem;
+                    overflow: hidden;
+                }
+
+                .icon-select-label span {
+                    color: #888;
+                    font-size: 0.6rem;
+                    letter-spacing: 1px;
+                    text-transform: uppercase;
+                }
+
+                .icon-select-label strong {
+                    color: #00d4ff;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    width: 100%;
+                    text-align: left;
+                }
+
+                .icon-arrow {
+                    color: #555;
+                    font-size: 0.7rem;
+                    flex-shrink: 0;
                 }
 
                 /* Auth Modal */

@@ -110,31 +110,46 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                                             {icons.map(icon => {
                                                 const owned = ownedSet.has(icon.id);
                                                 const isEquipped = equippedIcon === icon.id;
+                                                const isPreviewable = icon.tier < 8;
+                                                const showIcon = owned || isPreviewable;
+
                                                 return (
                                                     <div
                                                         key={icon.id}
-                                                        className={`icon-slot ${owned ? 'owned' : 'locked'} ${isEquipped ? 'equipped' : ''}`}
+                                                        className={`icon-slot ${owned ? 'owned' : 'locked'} ${isEquipped ? 'equipped' : ''} ${isPreviewable && !owned ? 'viewable-locked' : ''}`}
                                                         style={{
-                                                            borderColor: owned ? tierData.color : '#333',
-                                                            boxShadow: owned ? `0 0 10px ${tierData.color}40` : 'none'
+                                                            borderColor: owned ? tierData.color : (isPreviewable ? tierData.color + '44' : '#222'),
+                                                            boxShadow: owned ? `0 0 15px ${tierData.color}66` : 'none',
+                                                            cursor: showIcon ? 'pointer' : 'not-allowed'
                                                         }}
-                                                        onMouseEnter={() => owned && setHoveredIcon(icon)}
+                                                        onMouseEnter={() => showIcon && setHoveredIcon(icon)}
                                                         onMouseLeave={() => setHoveredIcon(null)}
                                                         onClick={() => {
-                                                            if (owned) {
+                                                            if (showIcon) {
                                                                 setSelectedPreview(icon);
                                                             }
                                                         }}
                                                     >
-                                                        {owned ? (
+                                                        {showIcon ? (
                                                             <>
                                                                 <div className="icon-visual">
-                                                                    <img src={icon.imageUrl} alt={icon.name} className="icon-img" />
+                                                                    <img
+                                                                        src={icon.imageUrl}
+                                                                        alt={icon.name}
+                                                                        className="icon-img"
+                                                                        style={{
+                                                                            filter: owned ? 'none' : 'grayscale(1) brightness(0.3) contrast(1.2)',
+                                                                            opacity: owned ? 1 : 0.6
+                                                                        }}
+                                                                    />
                                                                 </div>
                                                                 {isEquipped && <div className="equipped-badge">✓</div>}
+                                                                {!owned && <div className="lock-icon">🔒</div>}
                                                             </>
                                                         ) : (
-                                                            <div className="icon-visual locked-visual">?</div>
+                                                            <div className="icon-visual locked-visual">
+                                                                <span className="mystery-mark">?</span>
+                                                            </div>
                                                         )}
                                                     </div>
                                                 );
@@ -208,24 +223,49 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                     transition: all 0.3s; cursor: pointer;
                     background: rgba(0,0,0,0.3);
                 }
+                .icon-slot.owned {
+                    background: rgba(255,255,255,0.05);
+                }
                 .icon-slot.owned:hover {
-                    transform: scale(1.1);
+                    transform: scale(1.15);
+                    z-index: 10;
                 }
                 .icon-slot.locked {
-                    opacity: 0.4; cursor: not-allowed;
+                    background: rgba(0,0,0,0.5);
+                }
+                .icon-slot.viewable-locked {
+                    opacity: 0.8;
+                }
+                .icon-slot.viewable-locked:hover {
+                    transform: scale(1.05);
+                    opacity: 1;
                 }
 
                 .icon-visual { 
-                    font-size: 1.8rem; 
                     width: 100%; height: 100%;
                     display: flex; align-items: center; justify-content: center;
+                    position: relative;
                 }
                 .icon-img {
-                    width: 90%; height: 90%;
+                    width: 85%; height: 85%;
                     object-fit: contain;
                     border-radius: 50%;
+                    transition: all 0.3s;
                 }
-                .locked-visual { color: #333; font-size: 1.5rem; }
+                .locked-visual { color: #222; font-size: 1.5rem; }
+                .mystery-mark { font-weight: bold; opacity: 0.5; }
+
+                .lock-icon {
+                    position: absolute;
+                    bottom: 2px;
+                    right: 2px;
+                    font-size: 0.7rem;
+                    background: rgba(0,0,0,0.7);
+                    width: 18px; height: 18px;
+                    display: flex; align-items: center; justify-content: center;
+                    border-radius: 50%;
+                    border: 1px solid #444;
+                }
 
                 /* Two-Panel Layout */
                 .icon-chooser-modal {
@@ -278,14 +318,26 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                 .no-preview p { font-size: 0.9rem; }
 
                 .equipped-badge {
-                    position: absolute; top: -4px; right: -4px;
+                    position: absolute; top: -2px; left: -2px;
                     background: #00ff87; color: #000;
                     width: 20px; height: 20px; border-radius: 50%;
                     display: flex; align-items: center; justify-content: center;
                     font-size: 0.7rem; font-weight: bold;
+                    box-shadow: 0 0 10px rgba(0,255,135,0.5);
                 }
-                .icon-slot { position: relative; }
+                .icon-slot { position: relative; overflow: visible; }
                 .icon-slot.equipped { border-color: #00ff87 !important; box-shadow: 0 0 15px rgba(0,255,135,0.6) !important; }
+                .preview-label {
+                    position: absolute; top: -10px;
+                    font-size: 0.5rem; background: #555;
+                    padding: 1px 6px; border-radius: 10px;
+                    color: white; font-weight: bold;
+                    pointer-events: none;
+                }
+
+                .icon-slot.owned .icon-img {
+                    filter: drop-shadow(0 0 5px rgba(255,255,255,0.2));
+                }
 
                 @keyframes previewPulse {
                     0%, 100% { box-shadow: 0 0 40px rgba(0,212,255,0.4); }
