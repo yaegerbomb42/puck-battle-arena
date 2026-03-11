@@ -46,63 +46,49 @@ export default function MaintenanceOverlay({ message }) {
             {/* Top Bar Banner */}
             <div style={{
                 background: isCritical
-                    ? 'rgba(255, 0, 0, 0.9)'
-                    : 'linear-gradient(90deg, rgba(255,165,0,0) 0%, rgba(255,165,0,0.8) 20%, rgba(255,165,0,0.8) 80%, rgba(255,165,0,0) 100%)',
+                    ? 'rgba(255, 0, 0, 0.4)'
+                    : 'rgba(255, 165, 0, 0.4)',
                 color: '#fff',
-                padding: '1rem 4rem',
-                borderRadius: '0 0 20px 20px',
+                padding: '0.5rem 2rem',
+                borderRadius: '0 0 10px 10px',
                 textAlign: 'center',
-                boxShadow: '0 0 30px rgba(255, 165, 0, 0.4)',
+                boxShadow: '0 0 15px rgba(0, 0, 0, 0.4)',
                 transform: 'translateY(0)',
                 transition: 'all 0.5s ease',
-                backdropFilter: 'blur(5px)',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-                borderTop: 'none'
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderTop: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '1.5rem'
             }}>
-                <h2 style={{
-                    margin: 0,
-                    fontSize: '1.5rem',
-                    textTransform: 'uppercase',
-                    letterSpacing: '2px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem'
-                }}>
-                    ⚠️ SERVER UPDATE INBOUND
-                </h2>
-                <div style={{
-                    fontSize: '3rem',
-                    fontWeight: '800',
-                    fontFamily: 'monospace',
-                    color: isCritical ? '#ffcccc' : '#fff'
-                }}>
-                    T-MINUS {timeString}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+                    <h2 style={{
+                        margin: 0,
+                        fontSize: '0.9rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '1px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem'
+                    }}>
+                        ⚠️ SERVER RESTART IN:
+                    </h2>
+                    <div style={{
+                        fontSize: '1.2rem',
+                        fontWeight: '800',
+                        fontFamily: 'monospace',
+                        color: isCritical ? '#ffcccc' : '#fff'
+                    }}>
+                        {timeString}
+                    </div>
                 </div>
-                <p style={{ margin: '0.5rem 0 0', opacity: 0.9, fontSize: '0.9rem' }}>
-                    Server will restart for improvements. Please finish your match.
+                <p style={{ margin: '0', opacity: 0.8, fontSize: '0.75rem', borderLeft: '1px solid rgba(255,255,255,0.2)', paddingLeft: '1rem' }}>
+                    Please finish your match.
                 </p>
             </div>
 
-            {/* Screen border effect if critical */}
-            {isCritical && (
-                <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    boxShadow: 'inset 0 0 100px rgba(255, 0, 0, 0.5)',
-                    animation: 'pulse 1s infinite alternate',
-                    zIndex: -1
-                }} />
-            )}
-
-            <style>{`
-                @keyframes pulse {
-                    from { opacity: 0.3; }
-                    to { opacity: 0.8; }
-                }
-            `}</style>
+            {/* Screen border effect removed for minimal styling */}
         </div>
     );
 }

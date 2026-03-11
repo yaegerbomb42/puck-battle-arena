@@ -17,8 +17,8 @@ function FloorTile({ position, color, elevation = 0 }) {
 
     const [ref] = useBox(() => ({
         type: 'Static',
-        position: [position.x, y, position.z],
-        args: [TILE_SIZE, TILE_HEIGHT, TILE_SIZE],
+        position: [position.x, y - 2, position.z], // Shifted down
+        args: [TILE_SIZE, 5, TILE_SIZE], // Thickened to 5 units
         material: { friction: 0.4, restitution: 0.3 }
     }));
 
@@ -48,9 +48,9 @@ function IceTile({ position, color, elevation = 0 }) {
 
     const [ref] = useBox(() => ({
         type: 'Static',
-        position: [position.x, y, position.z],
-        args: [TILE_SIZE, TILE_HEIGHT, TILE_SIZE],
-        material: { friction: 0.05, restitution: 0.5 } // Slick but playable
+        position: [position.x, y - 2, position.z],
+        args: [TILE_SIZE, 5, TILE_SIZE],
+        material: { friction: 0.05, restitution: 0.5 }
     }));
 
     return (
@@ -85,8 +85,8 @@ function LavaTile({ position, color }) {
 
     const [ref] = useBox(() => ({
         type: 'Static',
-        position: [position.x, -TILE_HEIGHT, position.z],
-        args: [TILE_SIZE, TILE_HEIGHT * 0.3, TILE_SIZE],
+        position: [position.x, -2.5, position.z], // Deep buffer
+        args: [TILE_SIZE, 5, TILE_SIZE],
         material: { friction: 0.5, restitution: 0.1 },
         userData: { type: 'lava' }
     }));
@@ -302,43 +302,95 @@ function BoostPadTile({ position, color, rotation = 0 }) {
 }
 
 // ============================================
-// SPRING TILE
+// CONVEYOR TILE (NEW)
 // ============================================
-function SpringTile({ position, color }) {
-    const springRef = useRef();
+function ConveyorTile({ position, color, rotation = 0 }) {
+    const textureRef = useRef();
+    
+    useFrame((state) => {
+        if (textureRef.current) {
+            textureRef.current.offset.x -= 0.02; // Scrolling effect
+        }
+    });
 
     const [ref] = useBox(() => ({
         type: 'Static',
-        position: [position.x, -TILE_HEIGHT / 2, position.z],
-        args: [TILE_SIZE, TILE_HEIGHT, TILE_SIZE],
-        material: { friction: 0.3, restitution: 3.5 },
-        userData: { type: 'spring' }
+        position: [position.x, -2.25, position.z],
+        args: [TILE_SIZE, 5, TILE_SIZE],
+        material: { friction: 0.1, restitution: 0.2 },
+        userData: { type: 'conveyor', direction: rotation, speed: 12 }
     }));
 
-    useFrame((state) => {
-        if (springRef.current) {
-            const scale = 1 + Math.abs(Math.sin(state.clock.elapsedTime * 5)) * 0.2;
-            springRef.current.scale.y = scale;
-        }
-    });
+    return (
+        <mesh ref={ref} receiveShadow>
+            <boxGeometry args={[TILE_SIZE, TILE_HEIGHT, TILE_SIZE]} />
+            <meshStandardMaterial color={color || '#555'} metalness={0.6} roughness={0.4}>
+                {/* Scrolling arrows or lines would go here with a texture */}
+            </meshStandardMaterial>
+            <mesh position={[0, TILE_HEIGHT/2 + 0.01, 0]} rotation={[-Math.PI / 2, 0, rotation]}>
+                <planeGeometry args={[TILE_SIZE * 0.8, TILE_SIZE * 0.8]} />
+                <meshBasicMaterial color={color || '#00ff87'} transparent opacity={0.4} wireframe />
+            </mesh>
+        </mesh>
+    );
+}
+
+// ============================================
+// JUMP PAD TILE (NEW - Enhanced Spring)
+// ============================================
+function JumpPadTile({ position, color }) {
+    const [ref] = useBox(() => ({
+        type: 'Static',
+        position: [position.x, -2.25, position.z],
+        args: [TILE_SIZE, 5, TILE_SIZE],
+        material: { friction: 0.3, restitution: 4.5 }, // Extra bouncy
+        userData: { type: 'jump_pad' }
+    }));
 
     return (
         <group>
             <mesh ref={ref} receiveShadow>
                 <boxGeometry args={[TILE_SIZE, TILE_HEIGHT, TILE_SIZE]} />
-                <meshStandardMaterial color="#2a2a3a" />
+                <meshStandardMaterial color="#333" />
             </mesh>
-            <mesh ref={springRef} position={[position.x, 0.2, position.z]}>
-                <cylinderGeometry args={[0.4, 0.6, 0.5, 8]} />
-                <meshStandardMaterial
-                    color={color || '#ff9900'}
-                    emissive="#ffcc00"
-                    emissiveIntensity={0.5}
-                    metalness={0.9}
-                    roughness={0.2}
-                />
-            </mesh>
+            <Float speed={10} rotationIntensity={0} floatIntensity={0.5}>
+                <mesh position={[position.x, 0.5, position.z]}>
+                    <cylinderGeometry args={[0.8, 1, 0.3, 32]} />
+                    <meshStandardMaterial color={color || '#9d4edd'} emissive={color || '#9d4edd'} emissiveIntensity={2} />
+                </mesh>
+            </Float>
+            <pointLight position={[position.x, 1, position.z]} color={color || '#9d4edd'} intensity={1} distance={5} />
         </group>
+    );
+}
+
+// ============================================
+// MOVING WALL TILE (NEW)
+// ============================================
+function MovingWallTile({ position, color }) {
+    const wallRef = useRef();
+    const [ref, api] = useBox(() => ({
+        type: 'Kinematic', // Moves but isn't pushed
+        position: [position.x, TILE_HEIGHT * 2, position.z],
+        args: [TILE_SIZE, TILE_HEIGHT * 5, TILE_SIZE],
+        material: { friction: 0.5, restitution: 0.6 }
+    }));
+
+    useFrame((state) => {
+        // Oscillate up and down
+        const y = TILE_HEIGHT * 2 + Math.sin(state.clock.elapsedTime * 1.5) * 3;
+        api.position.set(position.x, y, position.z);
+    });
+
+    return (
+        <mesh ref={ref} castShadow receiveShadow>
+            <boxGeometry args={[TILE_SIZE, TILE_HEIGHT * 5, TILE_SIZE]} />
+            <meshStandardMaterial color={color || '#888'} metalness={0.5} roughness={0.2} />
+            <lineSegments>
+                <edgesGeometry args={[new THREE.BoxGeometry(TILE_SIZE, TILE_HEIGHT * 5, TILE_SIZE)]} />
+                <lineBasicMaterial color="#ff006e" linewidth={2} />
+            </lineSegments>
+        </mesh>
     );
 }
 
@@ -650,7 +702,13 @@ export default function ProceduralArena({ mapData }) {
                         result.push(<BoostPadTile key={key} position={worldPos} color={colors.glow} rotation={tile.rotation || 0} />);
                         break;
                     case TILE_TYPES.SPRING:
-                        result.push(<SpringTile key={key} position={worldPos} color={colors.secondary || colors.accent} />);
+                        result.push(<JumpPadTile key={key} position={worldPos} color={colors.secondary || colors.accent} />);
+                        break;
+                    case TILE_TYPES.CONVEYOR:
+                        result.push(<ConveyorTile key={key} position={worldPos} color={colors.floor} rotation={tile.rotation || 0} />);
+                        break;
+                    case TILE_TYPES.MOVING_WALL:
+                        result.push(<MovingWallTile key={key} position={worldPos} color={colors.floor} />);
                         break;
                     case TILE_TYPES.PIT:
                         result.push(<PitTile key={key} position={worldPos} />);

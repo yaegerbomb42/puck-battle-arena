@@ -274,14 +274,15 @@ export default function Store({ onClose, onOpenPack }) {
             <style jsx>{`
                 .store-overlay {
                     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-                    background: linear-gradient(135deg, rgba(8, 8, 20, 0.98), rgba(15, 10, 30, 0.98));
-                    backdrop-filter: blur(15px);
+                    background: radial-gradient(circle at 50% 50%, rgba(15, 10, 30, 0.95), rgba(8, 8, 20, 0.98));
+                    backdrop-filter: blur(25px) saturate(180%);
                     z-index: 1000;
                     display: flex; flex-direction: column;
                     padding: 2rem;
                     color: white;
                     font-family: 'Orbitron', sans-serif;
                     overflow-y: auto;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
                 }
                 .store-header {
                     display: flex; justify-content: space-between; align-items: center;
@@ -404,12 +405,13 @@ export default function Store({ onClose, onOpenPack }) {
 
                 /* Base bundle card */
                 .bundle-card {
-                    background: linear-gradient(135deg, rgba(255,255,255,0.05), rgba(0,0,0,0.2));
-                    border: 2px solid rgba(255,255,255,0.1);
+                    background: rgba(255, 255, 255, 0.03);
+                    backdrop-filter: blur(10px);
+                    border: 1px solid rgba(255, 255, 255, 0.1);
                     border-radius: 20px;
                     padding: 1.5rem;
                     width: 200px;
-                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                    transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
                     position: relative;
                     overflow: hidden;
                 }
@@ -452,9 +454,10 @@ export default function Store({ onClose, onOpenPack }) {
                     left: -50%;
                     width: 200%;
                     height: 200%;
-                    background: conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.06), transparent, rgba(255, 0, 110, 0.04), transparent);
-                    animation: shimmerRotate 6s linear infinite;
+                    background: conic-gradient(from 0deg, transparent, rgba(255, 215, 0, 0.1), transparent, rgba(255, 0, 110, 0.08), transparent);
+                    animation: shimmerRotate 4s linear infinite;
                     pointer-events: none;
+                    filter: blur(5px);
                 }
                 @keyframes shimmerRotate {
                     from { transform: rotate(0deg); }

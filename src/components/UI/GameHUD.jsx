@@ -121,7 +121,7 @@ function GameTimer({ seconds }) {
     const isLowTime = seconds <= 30;
 
     return (
-        <div className={`game-timer ${isLowTime ? 'low-time' : ''}`}>
+        <div className={`game-timer glass-dark ${isLowTime ? 'low-time' : ''}`} style={{ background: 'rgba(0,0,0,0.5)' }}>
             <span className="timer-value">
                 {minutes}:{secs.toString().padStart(2, '0')}
             </span>
@@ -195,7 +195,7 @@ function PowerupNotification({ powerup }) {
     if (!info) return null;
 
     return (
-        <div className="powerup-notification" style={{ borderColor: info.color }}>
+        <div className="powerup-notification glass-dark" style={{ borderColor: info.color }}>
             <span className="powerup-icon">{info.icon}</span>
             <span className="powerup-name">{info.name}</span>
             <span className="powerup-hint">SPACE to use</span>
@@ -211,6 +211,7 @@ export default function GameHUD({
     timer,
     activePowerup,
     loadout = [],
+    cooldowns = {},
     damageStats,
     stocks,
     knockoutMessage,
@@ -222,6 +223,18 @@ export default function GameHUD({
     localPlayerId,
     invincible = false // NEW PROP
 }) {
+    // Current time loop for smooth cooldowns
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+        let frameId;
+        const updateNow = () => {
+            setNow(Date.now());
+            frameId = requestAnimationFrame(updateNow);
+        };
+        frameId = requestAnimationFrame(updateNow);
+        return () => cancelAnimationFrame(frameId);
+    }, []);
+
     // Calculate vignette intensity based on damage and low stocks
     const myDamage = damageStats?.player1 || 0;
     const myStocks = stocks?.player1;
@@ -273,15 +286,25 @@ export default function GameHUD({
 
             {/* Bottom: Loadout */}
             <div className="hud-bottom">
-                <div className="loadout-container">
-                    {loadout.map((id, index) => (
-                        <LoadoutSlot
-                            key={id}
-                            powerupId={id}
-                            isActive={activePowerup?.id === id}
-                            keyHint={index + 1}
-                        />
-                    ))}
+                <div className="loadout-container glass-dark" style={{ padding: '8px', borderRadius: '15px' }}>
+                    {loadout.map((id, index) => {
+                        const cdKey = `${localPlayerId}_${id}`;
+                        const cdInfo = cooldowns?.[cdKey];
+                        let cooldownPercent = 0;
+                        if (cdInfo && now < cdInfo.end) {
+                            cooldownPercent = ((cdInfo.end - now) / cdInfo.duration) * 100;
+                        }
+
+                        return (
+                            <LoadoutSlot
+                                key={id}
+                                powerupId={id}
+                                isActive={cooldownPercent === 0} // Only active if no cooldown
+                                keyHint={index + 1}
+                                cooldownPercent={cooldownPercent}
+                            />
+                        );
+                    })}
                 </div>
 
                 <PowerupNotification powerup={activePowerup} />
@@ -420,13 +443,12 @@ export default function GameHUD({
                 }
                 
                 .game-timer {
-                    background: rgba(0,0,0,0.6);
                     padding: 8px 25px;
-                    border-radius: 25px;
-                    border: 2px solid #333;
+                    border: 1px solid rgba(255,255,255,0.1);
+                    backdrop-filter: blur(10px);
                 }
                 .game-timer.low-time {
-                    border-color: #ff0000;
+                    border-color: rgba(255,0,0,0.5);
                     animation: pulse-red 0.5s infinite;
                 }
                 .timer-value {
@@ -465,8 +487,8 @@ export default function GameHUD({
                 .loadout-slot {
                     width: 60px;
                     height: 60px;
-                    background: rgba(0,0,0,0.7);
-                    border: 2px solid #444;
+                    background: rgba(0,0,0,0.4);
+                    border: 1px solid rgba(255,255,255,0.2);
                     border-radius: 10px;
                     position: relative;
                     overflow: hidden;
@@ -517,10 +539,12 @@ export default function GameHUD({
                     display: flex;
                     align-items: center;
                     gap: 10px;
-                    background: rgba(0,0,0,0.8);
+                    background: rgba(0,0,0,0.6);
                     padding: 10px 20px;
-                    border-radius: 8px;
+                    border-radius: 12px;
                     border-left: 4px solid;
+                    backdrop-filter: blur(16px);
+                    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
                     animation: slide-in 0.3s ease-out;
                 }
                 .powerup-icon { font-size: 1.5rem; }
@@ -612,7 +636,7 @@ export function VictoryScreen({ winner, scores, stats, onRestart, onMenu }) {
     const reward = stats?.rewardZoins > 0 ? { amount: stats.rewardZoins, reason: winner === 'YOU' ? 'VICTORY BONUS' : 'PARTICIPATION' } : null;
 
     return (
-        <div className="victory-screen">
+        <div className="victory-screen glass-dark">
             <div className="victory-content">
                 <h1 className="game-over-text">GAME OVER</h1>
                 <h2 className="winner-text">{winner} WINS!</h2>
@@ -727,7 +751,8 @@ export function VictoryScreen({ winner, scores, stats, onRestart, onMenu }) {
                     margin-bottom: 40px;
                     padding: 20px;
                     background: rgba(255,255,255,0.05);
-                    border-radius: 10px;
+                    border-top: 1px solid rgba(255,255,255,0.1);
+                    border-radius: 16px;
                 }
                 
                 .stat {

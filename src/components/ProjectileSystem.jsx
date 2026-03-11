@@ -22,7 +22,7 @@ function Projectile({ id, type, position, velocity, ownerId, onHit, playerPositi
                     velocityRef.current[1] ** 2 +
                     velocityRef.current[2] ** 2
                 );
-                onHit(id, e.body.userData.playerId, type, speed);
+                onHit(id, e.body.userData.playerId, type, speed, ownerId);
             }
         }
     }));

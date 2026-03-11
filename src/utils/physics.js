@@ -15,7 +15,7 @@ export const PHYSICS_CONFIG = {
         acceleration: 60, // Instant snappy movement
         linearDamping: 0.1, // Maintains momentum
         angularDamping: 0.4,
-        restitution: 0.4, // Less bouncy, more controlled
+        restitution: 0.85, // MUCH bouncier per user request for "Elastic Feel"
         friction: 0.1,
         airControl: 0.8,
         jumpForce: 22 // Higher jump to match gravity
@@ -42,10 +42,10 @@ export const PHYSICS_CONFIG = {
 
     // Collision and knockback (Smash Bros style)
     collision: {
-        baseForce: 15, // Higher base knockback
-        damageMultiplier: 1.4, // Steeper scaling (100% dmg = 2.4x knockback)
-        minKnockbackVelocity: 4,
-        maxKnockback: 65, // Higher cap
+        baseForce: 22, // Explosive base knockback
+        damageMultiplier: 1.6, // Steeper scaling
+        minKnockbackVelocity: 5,
+        maxKnockback: 85, // Higher cap for "Blast Zone" finishes
         hitstunBase: 10,
         hitstunScaling: 0.3,
 
@@ -54,8 +54,8 @@ export const PHYSICS_CONFIG = {
 
         // Funny physics settings
         tumbleThreshold: 22,
-        bounceAmplification: 1.4,
-        spinFactor: 2.5
+        bounceAmplification: 1.8, // Active "ping" on impact
+        spinFactor: 3.5
     },
 
     // Stomp mechanics (Mario style)
@@ -68,16 +68,23 @@ export const PHYSICS_CONFIG = {
         horizontalRange: 1.2,
         verticalRange: 1.8
     },
+    
+    // Parry / Perfect Shield
+    parry: {
+        window: 250, // ms after dash start that parry is active
+        reflectionMultiplier: 1.6,
+        damageReduction: 1.0 // 100% reduction
+    },
 
     // Surface materials
     materials: {
-        normal: { friction: 0.4, restitution: 0.3 },
-        ice: { friction: 0.02, restitution: 0.5 },
-        bumper: { friction: 0.1, restitution: 2.5 },
-        wall: { friction: 0.4, restitution: 0.5 },
-        ramp: { friction: 0.3, restitution: 0.2 },
-        spring: { friction: 0.3, restitution: 3.5 },
-        sticky: { friction: 0.9, restitution: 0.1 }
+        normal: { friction: 0.4, restitution: 0.7 },
+        ice: { friction: 0.02, restitution: 0.8 },
+        bumper: { friction: 0.1, restitution: 2.8 },
+        wall: { friction: 0.3, restitution: 0.85 },
+        ramp: { friction: 0.3, restitution: 0.4 },
+        spring: { friction: 0.3, restitution: 4.0 },
+        sticky: { friction: 0.9, restitution: 0.05 }
     },
 
     // Special tile effects
@@ -306,7 +313,7 @@ export const POWERUP_TYPES = {
         color: '#00ff87',
         icon: '⚡',
         effect: { velocityMultiplier: 1.8 },
-        duration: 5000,
+        duration: 6000,
     },
     DAMAGE: {
         id: 'damage',
@@ -322,7 +329,7 @@ export const POWERUP_TYPES = {
         color: '#00d4ff',
         icon: '🛡️',
         effect: { knockbackResistance: 0.8 },
-        duration: 8000,
+        duration: 3000,
     },
     SUPER_BOOST: {
         id: 'superboost',

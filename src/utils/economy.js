@@ -171,6 +171,7 @@ export function getRandomIconFromTier(tier) {
 
 export function getIconById(id) {
     if (id > 1000) return STANDARD_COLORS.find(c => c.id === id) || null;
+    if (UNIQUE_SKINS[id]) return UNIQUE_SKINS[id];
     return ICON_DATABASE[id] || null;
 }
 
@@ -248,7 +249,21 @@ export const DIVINE_BONUSES = {
     147: { type: 'free_10_pack', description: 'Grants a free 10-pack upon unlock' },
     148: { type: 'double_forge_chance', description: 'Doubles forge success for 24 hours' },
     149: { type: 'vip_border', description: 'Exclusive profile border' },
-    150: { type: 'dev_grail', description: 'The legendary Dev Grail - grants a free 10-pack' }
+    150: { type: 'dev_grail', description: 'The legendary Dev Grail - grants a free 10-pack' },
+    999: { type: 'evolving_symbiote', description: 'Evolving Symbiote — Living procedural armor that reacts to your performance' }
+};
+
+// ============ UNIQUE SKINS (Special shader-backed skins) ============
+export const UNIQUE_SKINS = {
+    999: {
+        id: 999,
+        name: 'Evolving Symbiote',
+        tier: 999,
+        description: 'Living cyber-organic armor. Veins glow with kill streaks, spikes grow with aggression, rusts when idle, flows like mercury at speed.',
+        imageUrl: '/images/pucks/symbiote_preview.png',
+        isShader: true, // signals Puck.jsx to use SymbioteMaterial
+        shaderKey: 'symbiote'
+    }
 };
 
 export function claimDivineBonus(iconId) {

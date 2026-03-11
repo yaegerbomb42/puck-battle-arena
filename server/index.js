@@ -435,7 +435,7 @@ io.on('connection', (socket) => {
     }
 
     // Create a new room
-    socket.on('createRoom', ({ playerName, userEmail }, callback) => {
+    socket.on('createRoom', ({ playerName, userEmail, skinData }, callback) => {
         const roomCode = generateRoomCode();
         rooms.set(roomCode, {
             players: new Map(),
@@ -444,11 +444,11 @@ io.on('connection', (socket) => {
             hostId: socket.id,
         });
 
-        joinRoom(socket, roomCode, playerName, userEmail, callback);
+        joinRoom(socket, roomCode, playerName, userEmail, callback, skinData);
     });
 
     // Join existing room
-    socket.on('joinRoom', ({ roomCode, playerName, userEmail }, callback) => {
+    socket.on('joinRoom', ({ roomCode, playerName, userEmail, skinData }, callback) => {
         const code = roomCode.toUpperCase();
         if (!rooms.has(code)) {
             callback({ success: false, error: 'Room not found' });
@@ -461,11 +461,11 @@ io.on('connection', (socket) => {
             return;
         }
 
-        joinRoom(socket, code, playerName, userEmail, callback);
+        joinRoom(socket, code, playerName, userEmail, callback, skinData);
     });
 
     // Quick join - find or create room
-    socket.on('quickJoin', ({ playerName, userEmail }, callback) => {
+    socket.on('quickJoin', ({ playerName, userEmail, skinData }, callback) => {
         let roomCode = null;
 
         // Find room with space
@@ -488,7 +488,7 @@ io.on('connection', (socket) => {
             });
         }
 
-        joinRoom(socket, roomCode, playerName, userEmail, callback);
+        joinRoom(socket, roomCode, playerName, userEmail, callback, skinData);
     });
 
     // ============ ANALYTICS TRACKING ============
@@ -687,15 +687,17 @@ io.on('connection', (socket) => {
     });
 
     // Helper: Join room
-    function joinRoom(socket, roomCode, playerName, userEmail, callback) {
+    function joinRoom(socket, roomCode, playerName, userEmail, callback, skinData = {}) {
         const room = rooms.get(roomCode);
         const playerIndex = room.players.size;
 
         const player = {
             id: socket.id,
             name: playerName || `Player ${playerIndex + 1}`,
-            email: userEmail || null, // Store email for rewards
-            color: PLAYER_COLORS[playerIndex],
+            email: userEmail || null, 
+            color: skinData.color || PLAYER_COLORS[playerIndex],
+            skinId: skinData.skinId || null,
+            skinTier: skinData.skinTier || 0,
             position: getSpawnPosition(playerIndex),
             velocity: [0, 0, 0],
             ready: false,
@@ -740,7 +742,7 @@ io.on('connection', (socket) => {
 
         // Reset positions
         let i = 0;
-        for (const [id, player] of room.players) {
+        for (const [, player] of room.players) {
             player.position = getSpawnPosition(i);
             player.score = 0;
             i++;

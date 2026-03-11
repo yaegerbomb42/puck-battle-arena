@@ -25,20 +25,42 @@ export function ZoinCoin({ type = 'GOLD', position }) {
 
     return (
         <group ref={ref}>
-            {/* Edge (Metal) */}
+            {/* Edge (Metal/Crystal) */}
             <mesh rotation={[Math.PI / 2, 0, 0]}>
                 <cylinderGeometry args={[config.size, config.size, 0.1, 32, 1, true]} />
-                <meshStandardMaterial color={config.color} metalness={0.9} roughness={0.3} />
+                <meshPhysicalMaterial 
+                    color={config.color} 
+                    metalness={config.metalness} 
+                    roughness={config.roughness}
+                    transmission={config.transmission || 0}
+                    thickness={0.1}
+                    emissive={config.emissive || '#000'}
+                    emissiveIntensity={config.emissiveIntensity || 0}
+                />
             </mesh>
 
             {/* Faces (Texture) */}
-            <mesh rotation={[Math.PI / 2, 0, 0]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0.051, 0]}>
                 <circleGeometry args={[config.size, 32]} />
-                <meshStandardMaterial map={texture} metalness={0.8} roughness={0.4} />
+                <meshStandardMaterial 
+                    map={texture} 
+                    transparent 
+                    metalness={0.8} 
+                    roughness={0.4} 
+                    emissive={config.emissive || '#000'}
+                    emissiveIntensity={(config.emissiveIntensity || 0) * 0.5}
+                />
             </mesh>
-            <mesh rotation={[-Math.PI / 2, 0, 0]}>
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.051, 0]}>
                 <circleGeometry args={[config.size, 32]} />
-                <meshStandardMaterial map={texture} metalness={0.8} roughness={0.4} />
+                <meshStandardMaterial 
+                    map={texture} 
+                    transparent 
+                    metalness={0.8} 
+                    roughness={0.4} 
+                    emissive={config.emissive || '#000'}
+                    emissiveIntensity={(config.emissiveIntensity || 0) * 0.5}
+                />
             </mesh>
         </group>
     );

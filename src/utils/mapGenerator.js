@@ -15,7 +15,9 @@ export const TILE_TYPES = {
     POWERUP_ZONE: 'powerup',
     BOOST_PAD: 'boost_pad',
     SPRING: 'spring',
-    PIT: 'pit'
+    PIT: 'pit',
+    CONVEYOR: 'conveyor',
+    MOVING_WALL: 'moving_wall'
 };
 
 // Biome definitions with fog settings
@@ -33,7 +35,7 @@ export const BIOMES = {
         },
         skybox: 'night',
         fog: { color: '#0a0a1a', near: 30, far: 80 },
-        weights: { floor: 0.4, ice: 0.05, lava: 0.08, ramp: 0.15, bumper: 0.15, boost_pad: 0.12, spring: 0.05 }
+        weights: { floor: 0.35, ice: 0.05, lava: 0.08, ramp: 0.1, bumper: 0.1, boost_pad: 0.12, spring: 0.05, conveyor: 0.1, moving_wall: 0.05 }
     },
     VOLCANIC_FORGE: {
         id: 'volcanic_forge',
@@ -48,7 +50,7 @@ export const BIOMES = {
         },
         skybox: 'sunset',
         fog: { color: '#1a0a05', near: 20, far: 60 },
-        weights: { floor: 0.35, ice: 0, lava: 0.25, ramp: 0.12, bumper: 0.13, spring: 0.1, pit: 0.05 }
+        weights: { floor: 0.3, ice: 0, lava: 0.25, ramp: 0.1, bumper: 0.1, spring: 0.1, pit: 0.05, conveyor: 0.1 }
     },
     FROZEN_SUMMIT: {
         id: 'frozen_summit',
@@ -108,7 +110,7 @@ export const BIOMES = {
         },
         skybox: 'night',
         fog: { color: '#0a0a15', near: 35, far: 100 },
-        weights: { floor: 0.3, ice: 0.1, lava: 0.05, ramp: 0.1, bumper: 0.2, boost_pad: 0.15, pit: 0.1 }
+        weights: { floor: 0.25, ice: 0.1, lava: 0.05, ramp: 0.1, bumper: 0.15, boost_pad: 0.1, pit: 0.1, conveyor: 0.1, moving_wall: 0.05 }
     },
     SOLAR_PARK: {
         id: 'solar_park',
@@ -434,7 +436,9 @@ function mapWeightToTile(key) {
         'bumper': TILE_TYPES.BUMPER,
         'boost_pad': TILE_TYPES.BOOST_PAD,
         'spring': TILE_TYPES.SPRING,
-        'pit': TILE_TYPES.PIT
+        'pit': TILE_TYPES.PIT,
+        'conveyor': TILE_TYPES.CONVEYOR,
+        'moving_wall': TILE_TYPES.MOVING_WALL
     };
     return mapping[key] || TILE_TYPES.FLOOR;
 }

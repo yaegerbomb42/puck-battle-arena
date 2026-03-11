@@ -1,18 +1,18 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useFrame, extend } from '@react-three/fiber';
 import { useSphere } from '@react-three/cannon';
-import { Text, Billboard, useTexture } from '@react-three/drei';
+import { Text, Billboard, useTexture, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { PHYSICS_CONFIG, isInKnockoutZone, canStomp, calculateStompDamage } from '../utils/physics';
 import { audio } from '../utils/audio';
 import useGamepad from '../hooks/useGamepad';
 
-import { LegendaryMaterial, CosmicMaterial, DivineMaterial, MysteryMaterial } from '../utils/PuckMaterials';
+import { LegendaryMaterial, CosmicMaterial, DivineMaterial, MysteryMaterial, SymbioteMaterial } from '../utils/PuckMaterials';
 
 // =======================================
 
 
-extend({ LegendaryMaterial, CosmicMaterial, DivineMaterial, MysteryMaterial });
+extend({ LegendaryMaterial, CosmicMaterial, DivineMaterial, MysteryMaterial, SymbioteMaterial });
 
 
 
@@ -135,6 +135,30 @@ function StompIndicator({ active, position }) {
 }
 
 // ============================================
+// PARRY VISUAL EFFECT (Shockwave)
+// ============================================
+function ParryEffect({ position, active }) {
+    const meshRef = useRef();
+    const [opacity, setOpacity] = useState(0.8);
+
+    useFrame((state) => {
+        if (meshRef.current && active) {
+            meshRef.current.scale.addScalar(0.15);
+            setOpacity(prev => Math.max(0, prev - 0.05));
+        }
+    });
+
+    if (!active) return null;
+
+    return (
+        <mesh ref={meshRef} position={position}>
+            <sphereGeometry args={[0.5, 32, 32]} />
+            <meshBasicMaterial color="#00ffff" transparent opacity={opacity} wireframe />
+        </mesh>
+    );
+}
+
+// ============================================
 // SHIELD VISUAL EFFECT
 // ============================================
 function ShieldEffect({ position, radius }) {
@@ -162,6 +186,97 @@ function ShieldEffect({ position, radius }) {
 }
 
 // ============================================
+// STUN VISUAL EFFECT (Stars)
+// ============================================
+function StunEffect({ position, active }) {
+    const groupRef = useRef();
+
+    useFrame((state) => {
+        if (groupRef.current && active) {
+            groupRef.current.rotation.y = state.clock.elapsedTime * 4;
+            groupRef.current.position.y = 1.6 + Math.sin(state.clock.elapsedTime * 6) * 0.1;
+        }
+    });
+
+    if (!active) return null;
+
+    return (
+        <group ref={groupRef} position={[position[0], position[1], position[2]]}>
+            {[0, 1, 2].map((i) => (
+                <mesh key={i} position={[Math.cos((i / 3) * Math.PI * 2) * 0.6, 0, Math.sin((i / 3) * Math.PI * 2) * 0.6]}>
+                    <octahedronGeometry args={[0.08, 0]} />
+                    <meshBasicMaterial color="#ffff00" />
+                </mesh>
+            ))}
+        </group>
+    );
+}
+
+// ============================================
+// COLLISION SPARK BURST - Short-lived particle effect
+// ============================================
+function CollisionSparks({ sparks }) {
+    return sparks.map(spark => (
+        <SparkBurst key={spark.id} position={spark.position} color={spark.color} intensity={spark.intensity} />
+    ));
+}
+
+function SparkBurst({ position, color = '#ffcc00', intensity = 1 }) {
+    const meshRef = useRef();
+    const startTime = useRef(0);
+    const count = Math.min(Math.floor(8 + intensity * 6), 30);
+    const duration = 0.4 + intensity * 0.1;
+    const dummy = useMemo(() => new THREE.Object3D(), []);
+
+    const particles = useMemo(() => {
+        return new Array(count).fill(0).map(() => ({
+            velocity: new THREE.Vector3(
+                (Math.random() - 0.5) * 12 * intensity,
+                Math.random() * 8 * intensity + 2,
+                (Math.random() - 0.5) * 12 * intensity
+            ),
+            scale: 0.02 + Math.random() * 0.04
+        }));
+    }, [count, intensity]);
+
+    useEffect(() => {
+        startTime.current = performance.now() / 1000;
+    }, []);
+
+    useFrame(({ clock }) => {
+        if (!meshRef.current) return;
+        const elapsed = clock.elapsedTime - startTime.current;
+        if (elapsed < 0) return;
+        const progress = Math.min(elapsed / duration, 1);
+
+        particles.forEach((p, i) => {
+            if (progress >= 1) {
+                dummy.scale.set(0, 0, 0);
+            } else {
+                const t = elapsed;
+                dummy.position.set(
+                    position[0] + p.velocity.x * t,
+                    position[1] + p.velocity.y * t - 4.9 * t * t,
+                    position[2] + p.velocity.z * t
+                );
+                const fadeScale = p.scale * (1 - progress);
+                dummy.scale.set(fadeScale, fadeScale, fadeScale);
+            }
+            dummy.updateMatrix();
+            meshRef.current.setMatrixAt(i, dummy.matrix);
+        });
+        meshRef.current.instanceMatrix.needsUpdate = true;
+    });
+
+    return (
+        <instancedMesh ref={meshRef} args={[null, null, count]}>
+            <dodecahedronGeometry args={[1, 0]} />
+            <meshBasicMaterial color={color} toneMapped={false} />
+        </instancedMesh>
+    );
+}
+
+// ============================================
 // MAIN PUCK COMPONENT
 // ============================================
 export default function Puck({
@@ -180,6 +295,7 @@ export default function Puck({
     onPositionUpdate,
     onCollision,
     onUseItem,
+    onUseLoadoutItem,
     onImpact,
     onInvincibleChange, // NEW PROP
     isPaused,
@@ -187,7 +303,9 @@ export default function Puck({
     remoteVelocity,
     allPlayerPositions = {},
     gameMode = 'knockout',
-    explosionEvent // NEW PROP
+    skinTier = 0, // NEW PROP
+    explosionEvent,
+    projectileImpactEvent // NEW PROP
 }) {
     const config = PHYSICS_CONFIG.puck;
 
@@ -198,13 +316,16 @@ export default function Puck({
         return config.radius;
     }, [powerup?.id, config.radius]);
 
+    const skinMassModifier = 1 + (skinTier * 0.025); // +2.5% per tier (Epic Tier 4 = +10%)
+    const skinAccelModifier = 1 + (skinTier * 0.02); // +2.0% per tier (Legendary Tier 6 = +12%)
+
     const effectiveMass = useMemo(() => {
-        let mass = config.mass;
+        let mass = config.mass * skinMassModifier;
         if (powerup?.id === 'giant') mass *= 2.5;
         if (powerup?.id === 'shrink') mass *= 0.5;
         if (powerup?.id === 'shield') mass *= 1.5;
         return mass;
-    }, [powerup?.id, config.mass]);
+    }, [powerup?.id, config.mass, skinMassModifier]);
 
     // Smash Bros knockback scaling
     const knockbackMultiplier = useMemo(() => {
@@ -233,13 +354,23 @@ export default function Puck({
     const [isRespawning, setIsRespawning] = useState(false);
     const [isFlashing, setIsFlashing] = useState(false);
     const [isAirborne, setIsAirborne] = useState(false);
+    const [isStunned, setIsStunned] = useState(false);
+    const [parryEvent, setParryEvent] = useState(null);
     const [stompTarget, setStompTarget] = useState(null);
+    const [sparkEvents, setSparkEvents] = useState([]);
+    const lastHitBy = useRef(null); // Track who last hit us for kill attribution
+    const sparkIdCounter = useRef(0);
 
-    // Input state with debouncing - FIX for spacebar spam
     const inputState = useRef({
         keys: {},
         spacePressed: false, // Tracks if space was just pressed (for single-fire)
         spaceHeld: false,    // Tracks if space is being held
+        loadout1Pressed: false,
+        loadout1Held: false,
+        loadout2Pressed: false,
+        loadout2Held: false,
+        loadout3Pressed: false,
+        loadout3Held: false,
         jumpCooldown: 0,
         lastJumpTime: 0
     });
@@ -261,6 +392,26 @@ export default function Puck({
         }
     }, [invincible, isLocalPlayer, onInvincibleChange]);
 
+    // Visual pulsing while invincible
+    useEffect(() => {
+        if (!invincible) return;
+        const interval = setInterval(() => {
+            setIsFlashing(prev => !prev);
+        }, 150);
+        return () => {
+            clearInterval(interval);
+            setIsFlashing(false);
+        };
+    }, [invincible]);
+
+    // [NEW] Handle Projectile Impact Attribution
+    useEffect(() => {
+        if (projectileImpactEvent && projectileImpactEvent.targetId === playerId) {
+            lastHitBy.current = projectileImpactEvent.ownerId;
+            // Optionally add feedback for being hit by projectile
+        }
+    }, [projectileImpactEvent, playerId]);
+
     // ========== COLLISION HANDLER ==========
     const handlePhysicsCollision = useCallback((e) => {
         if (!isLocalPlayer || isPaused || invincible) return;
@@ -281,6 +432,25 @@ export default function Puck({
 
         // Player-to-player collision
         if (otherBody?.userData?.type === 'puck' && impactVelocity > 2) {
+            // [NEW] PERFECT SHIELD (PARRY) LOGIC
+            const now = Date.now();
+            const parryWindow = PHYSICS_CONFIG.parry?.window || 250;
+            const isParrying = now - lastDashTime.current < parryWindow;
+
+            if (isParrying) {
+                // Successful Parry!
+                audio.playImpact(2.0); // Heavy sound
+                setIsFlashing(true);
+                setParryEvent({ timestamp: Date.now(), position: [...position.current] });
+                setTimeout(() => setParryEvent(null), 400);
+                setTimeout(() => setIsFlashing(false), 200);
+                return; 
+            }
+
+            // Track last hitter for kill attribution
+            if (otherBody.userData.playerId) {
+                lastHitBy.current = otherBody.userData.playerId;
+            }
             const knockbackForce = PHYSICS_CONFIG.collision.baseForce * knockbackMultiplier;
             const normal = new THREE.Vector3(
                 e.contact.contactNormal[0],
@@ -291,18 +461,53 @@ export default function Puck({
             // Upward bias increases with damage (Smash Bros style)
             const upwardBias = Math.min(damage / 150, 0.6);
 
+            // NEW: Active Bounce Amplification (makes it feel "Elastic")
+            const activeBounceForce = impactVelocity * PHYSICS_CONFIG.collision.bounceAmplification;
+            const finalKnockback = (knockbackForce + activeBounceForce) * knockbackMultiplier;
+
             api.applyImpulse([
-                normal.x * knockbackForce,
-                (Math.abs(normal.y) + upwardBias) * knockbackForce * 0.5,
-                normal.z * knockbackForce
+                normal.x * finalKnockback,
+                (Math.abs(normal.y) + upwardBias) * finalKnockback * 0.4,
+                normal.z * finalKnockback
             ], [0, 0, 0]);
 
             onCollision?.(impactVelocity * knockbackMultiplier);
-            audio.playImpact(impactVelocity / 10);
+
+            // Dynamic sounds based on power
+            if (impactVelocity > 15) {
+                audio.playExplosion?.(); // Super-heavy hit
+            } else {
+                audio.playImpact(impactVelocity / 8);
+            }
+
+            // Emit spark particles at contact midpoint
+            const contactPos = [
+                position.current[0] + normal.x * effectiveRadius * 0.9,
+                position.current[1] + 0.2,
+                position.current[2] + normal.z * effectiveRadius * 0.9
+            ];
+            const sparkId = sparkIdCounter.current++;
+            setSparkEvents(prev => [...prev, {
+                id: sparkId,
+                position: contactPos,
+                color: impactVelocity > 8 ? '#ff6600' : '#ffcc00',
+                intensity: Math.min(impactVelocity / 5, 3)
+            }]);
+            // Auto-remove after particle lifetime
+            setTimeout(() => {
+                setSparkEvents(prev => prev.filter(s => s.id !== sparkId));
+            }, 800);
 
             // Heavy hit effects
             if (impactVelocity > 5) {
                 onImpact?.(impactVelocity);
+                
+                // STUN LOGIC - Stun on heavy impact (impact > 18)
+                if (impactVelocity > 18 && !invincible) {
+                    setIsStunned(true);
+                    setTimeout(() => setIsStunned(false), 800 + (damage * 5)); // Stun duration scales with damage
+                }
+
                 setIsFlashing(true);
                 setTimeout(() => setIsFlashing(false), 80);
 
@@ -321,11 +526,17 @@ export default function Puck({
         if (tileType === 'boost_pad') {
             const dir = otherBody.userData.direction || 0;
             api.applyImpulse([Math.sin(dir) * 20, 5, Math.cos(dir) * 20], [0, 0, 0]);
-        } else if (tileType === 'spring') {
-            api.applyImpulse([0, 35, 0], [0, 0, 0]);
-            onImpact?.(5);
+        } else if (tileType === 'spring' || tileType === 'jump_pad') {
+            const boost = tileType === 'jump_pad' ? 45 : 35;
+            api.applyImpulse([0, boost, 0], [0, 0, 0]);
+            onImpact?.(8);
+            audio.playJump();
+        } else if (tileType === 'conveyor') {
+            const dir = otherBody.userData.direction || 0;
+            const speed = otherBody.userData.speed || 10;
+            api.applyImpulse([Math.sin(dir) * speed, 2, Math.cos(dir) * speed], [0, 0, 0]);
         }
-    }, [isLocalPlayer, isPaused, invincible, knockbackMultiplier, damage, api, onCollision, onImpact]);
+    }, [isLocalPlayer, isPaused, invincible, knockbackMultiplier, damage, api, onCollision, onImpact, effectiveRadius]);
 
     // ========== SUBSCRIBE TO PHYSICS ==========
     useEffect(() => {
@@ -360,6 +571,20 @@ export default function Puck({
                 inputState.current.spaceHeld = true;
             }
 
+            // Loadout 1/2/3 single press detection
+            if (e.code === 'Digit1' && !inputState.current.loadout1Held) {
+                inputState.current.loadout1Pressed = true;
+                inputState.current.loadout1Held = true;
+            }
+            if (e.code === 'Digit2' && !inputState.current.loadout2Held) {
+                inputState.current.loadout2Pressed = true;
+                inputState.current.loadout2Held = true;
+            }
+            if (e.code === 'Digit3' && !inputState.current.loadout3Held) {
+                inputState.current.loadout3Pressed = true;
+                inputState.current.loadout3Held = true;
+            }
+
             // Dash Input (Shift)
             if (e.shiftKey) {
                 inputState.current.dashPressed = true;
@@ -372,6 +597,9 @@ export default function Puck({
             if (e.code === 'Space') {
                 inputState.current.spaceHeld = false;
             }
+            if (e.code === 'Digit1') inputState.current.loadout1Held = false;
+            if (e.code === 'Digit2') inputState.current.loadout2Held = false;
+            if (e.code === 'Digit3') inputState.current.loadout3Held = false;
             if (!e.shiftKey) {
                 inputState.current.dashPressed = false;
             }
@@ -388,7 +616,7 @@ export default function Puck({
 
     // ========== MOVEMENT & AI LOOP (PHYSICS STEP) ==========
     useFrame(() => {
-        if (isPaused || isRespawning) return;
+        if (isPaused || isRespawning || isStunned) return;
 
         // --- LOCAL PLAYER INPUT ---
         if (isLocalPlayer) {
@@ -435,8 +663,8 @@ export default function Puck({
                 forceZ /= mag;
             }
 
-            // Apply powerup modifiers
-            let accel = config.acceleration;
+            // Apply powerup & skin modifiers
+            let accel = config.acceleration * skinAccelModifier;
             if (powerup?.id === 'speed_boost') accel *= 1.8;
             if (powerup?.id === 'shrink') accel *= 1.3;
             if (powerup?.id === 'giant') accel *= 0.7;
@@ -450,20 +678,50 @@ export default function Puck({
                 api.applyForce([forceX * accel, 0, forceZ * accel], [0, 0, 0]);
             }
 
-            // DASH
+            // DASH / AIR DODGE
             const now = Date.now();
             if (dashPressed && (now - lastDashTime.current > DASH_COOLDOWN_MS)) {
+                const isInAir = position.current[1] > 1.2;
                 let dashX = forceX;
                 let dashZ = forceZ;
+                
                 if (dashX === 0 && dashZ === 0) dashZ = -1; // Default fwd
-                api.applyImpulse([dashX * DASH_FORCE, 0, dashZ * DASH_FORCE], [0, 0, 0]);
+
+                // Air Dodge specific adjustments
+                const force = isInAir ? DASH_FORCE * 0.85 : DASH_FORCE;
+                const verticalBoost = isInAir ? 5 : 0; // Slight lift in air
+
+                api.applyImpulse([dashX * force, verticalBoost, dashZ * force], [0, 0, 0]);
+                
+                // Invincibility during dodge (Skill Ceiling)
+                setInvincible(true);
+                setTimeout(() => setInvincible(false), isInAir ? 400 : 200);
+
                 audio.playJump();
-                onImpact?.(5);
+                if (!isInAir) onImpact?.(5); // Ground dash impact
+                
                 lastDashTime.current = now;
                 inputState.current.dashPressed = false;
+
+                // Visual "Whoosh" effect could go here
+                setIsFlashing(true);
+                setTimeout(() => setIsFlashing(false), 100);
+            }
+            // LOADOUT USAGE (1, 2, 3)
+            if (inputState.current.loadout1Pressed) {
+                inputState.current.loadout1Pressed = false;
+                onUseLoadoutItem?.(0);
+            }
+            if (inputState.current.loadout2Pressed) {
+                inputState.current.loadout2Pressed = false;
+                onUseLoadoutItem?.(1);
+            }
+            if (inputState.current.loadout3Pressed) {
+                inputState.current.loadout3Pressed = false;
+                onUseLoadoutItem?.(2);
             }
 
-            // JUMP / ITEM
+            // JUMP / MAP ITEM (Space)
             if (spacePressed) {
                 inputState.current.spacePressed = false;
                 if (powerup && powerup.type !== 'buff') {
@@ -528,13 +786,14 @@ export default function Puck({
 
     // ========== REMOTE PLAYER SYNC ==========
     useEffect(() => {
-        if (!isLocalPlayer && remotePosition) {
+        // Skip sync for bots so they can use full physics
+        if (!isLocalPlayer && !isBot && remotePosition) {
             api.position.set(...remotePosition);
         }
-        if (!isLocalPlayer && remoteVelocity) {
+        if (!isLocalPlayer && !isBot && remoteVelocity) {
             api.velocity.set(...remoteVelocity);
         }
-    }, [api, isLocalPlayer, remotePosition, remoteVelocity]);
+    }, [api, isLocalPlayer, isBot, remotePosition, remoteVelocity]);
 
     // ========== GAME LOGIC FRAME UPDATE ==========
     useFrame((state) => {
@@ -575,9 +834,9 @@ export default function Puck({
             });
         }
 
-        // Position update for local player
-        if (isLocalPlayer) {
-            onPositionUpdate?.(position.current, velocity.current);
+        // Position update for local player AND offline bots
+        if (isLocalPlayer || isBot) {
+            onPositionUpdate?.(playerId, position.current, velocity.current);
 
             // Knockout check
             if (!isRespawning) {
@@ -594,7 +853,7 @@ export default function Puck({
     // ========== KNOCKOUT HANDLER ==========
     const handleKnockout = useCallback(() => {
         setIsRespawning(true);
-        onKnockout?.(playerId);
+        onKnockout?.(playerId, lastHitBy.current);
         audio.playKnockout();
 
         setTimeout(() => {
@@ -626,9 +885,53 @@ export default function Puck({
     // Initialize shader ref
     const shaderRef = useRef();
 
-    useFrame((state) => {
+    // Symbiote Shader uniforms tracking
+    const symbioteRefMain = useRef();
+    const symbioteRefPlates = useRef();
+    const symbioteRefTop = useRef();
+
+    // Symbiote Telemetry state
+    const idleTimer = useRef(0);
+
+    const isEvolvingSymbiote = tier === 999 || (iconPath && iconPath.includes('symbiote'));
+
+    useFrame((state, delta) => {
         if (shaderRef.current) {
             shaderRef.current.time = state.clock.elapsedTime;
+        }
+
+        // Update Symbiote Telemetry
+        if (isEvolvingSymbiote) {
+            // Speed telemetry
+            const currentSpeed = Math.min(speed / 15.0, 1.0); // Normalize speed 0-1
+
+            // Idle telemetry
+            if (currentSpeed < 0.1) {
+                idleTimer.current += delta;
+            } else {
+                idleTimer.current = Math.max(0, idleTimer.current - delta * 5.0); // Recover fast
+            }
+            const currentIdleFactor = Math.min(idleTimer.current / 5.0, 1.0); // 5 seconds to full rust
+
+            // Mock KPM growth - use damage as a proxy for aggressiveness
+            const currentKpm = Math.min(damage / 100.0 * 3.0, 3.0);
+
+            // Apply to all symbiote materials
+            const updateSymbiote = (ref) => {
+                if (ref.current) {
+                    ref.current.time = state.clock.elapsedTime;
+                    ref.current.speed = currentSpeed;
+                    ref.current.idleFactor = currentIdleFactor;
+                    ref.current.kpm = currentKpm;
+
+                    // Map player's damage to their active "streak" heat
+                    ref.current.winStreak = Math.min(damage / 50.0, 3.0);
+                }
+            };
+
+            updateSymbiote(symbioteRefMain);
+            updateSymbiote(symbioteRefPlates);
+            updateSymbiote(symbioteRefTop);
         }
     });
 
@@ -641,11 +944,31 @@ export default function Puck({
     const isDivine = tier === 10;
     const isCosmic = tier === 9;
     const isLegendary = tier >= 6 && tier < 9;
-    const isMystery = iconPath && iconPath.includes('icon_150'); // Example logic for unique item
+    const isMystery = iconPath && iconPath.includes('icon_150');
+
+    // Accent colors — Dual neon grooves (Cyan + Magenta)
+    const accentCyan = '#00d4ff';
+    const accentMagenta = '#c840ff';
+    
+    // [NEW] Dynamic Chassis Logic
+    const skinColor = new THREE.Color(color);
+    const goldColor = '#c9952b';
+    const goldDark = '#8b6914';
+    
+    // Choose base material color based on tier
+    // Standard/Common (0-1) use skin color
+    // Uncommon/Rare (2-3) use skin color with metallic sheen
+    // Epic+ (4+) blend with gold/premium materials
+    const chassisColor = tier >= 4 ? goldColor : color;
+    const dome = 0.12;
 
     // Final Puck Mesh Parts
     const bodyRadius = config.radius;
-    const bodyHeight = 0.35;
+    const bodyHeight = 0.32;
+
+    // Channel groove angles — 5-fold symmetry like the reference sculpture
+    const channelAngles = [0, 72, 144, 216, 288];
+    const plateArcSpan = (2 * Math.PI / 5) - 0.12;
 
     return (
         <group>
@@ -690,79 +1013,177 @@ export default function Puck({
                 />
             )}
 
-            {/* Main puck */}
+            {/* ========== SCULPTURAL PUCK MODEL ========== */}
             <group ref={ref} visible={!isRespawning} scale={[puckScale, puckScale, puckScale]}>
-                {/* === HIGH-TECH PUCK MODEL === */}
 
-                {/* 1. Inner Glowing Core (Visible through gaps) */}
+                {/* 0. Inner Core — emissive bleed through channel gaps */}
                 <mesh>
-                    <cylinderGeometry args={[bodyRadius * 0.95, bodyRadius * 0.95, bodyHeight * 0.9, 32]} />
+                    <cylinderGeometry args={[bodyRadius * 0.9, bodyRadius * 0.9, bodyHeight * 0.8, 32]} />
                     <meshStandardMaterial
                         color={color}
                         emissive={color}
-                        emissiveIntensity={2}
+                        emissiveIntensity={2.5}
                         toneMapped={false}
                     />
                 </mesh>
 
-                {/* 2. Main Chassis (Dark Metal) */}
+                {/* 1. Main Chassis Body — Domed gold disc */}
                 <mesh castShadow receiveShadow>
-                    <cylinderGeometry args={[bodyRadius * 0.85, bodyRadius * 0.85, bodyHeight, 32]} />
-                    <meshStandardMaterial
-                        color={isFlashing ? "#ffffff" : "#111111"}
-                        metalness={0.9}
-                        roughness={0.2}
-                        emissive={isFlashing ? "#ffffff" : "#000000"}
-                    />
+                    <cylinderGeometry args={[bodyRadius, bodyRadius * 0.95, bodyHeight, 32]} />
+                    {isEvolvingSymbiote ? (
+                        <symbioteMaterial ref={symbioteRefMain} />
+                    ) : (
+                        <meshPhysicalMaterial
+                            color={isFlashing ? '#ffffff' : chassisColor}
+                            metalness={tier >= 2 ? 0.9 : 0.6}
+                            roughness={tier >= 4 ? 0.1 : 0.4}
+                            clearcoat={tier >= 3 ? 1 : 0}
+                            clearcoatRoughness={0.1}
+                            emissive={isFlashing ? '#ffffff' : skinColor}
+                            emissiveIntensity={isFlashing ? 1 : (tier >= 4 ? 0.2 : 0.05)}
+                        />
+                    )}
                 </mesh>
 
+                {/* 2. Deep recessed channel grooves — dark with neon glow inside */}
+                {channelAngles.map((deg, idx) => {
+                    const rad = deg * Math.PI / 180;
+                    const len = bodyRadius * 1.15;
+                    return (
+                        <group key={`ch-${idx}`}>
+                            {/* Dark channel body */}
+                            <mesh
+                                position={[Math.sin(rad) * len / 2, dome * 0.15, Math.cos(rad) * len / 2]}
+                                rotation={[0, -rad, 0]}
+                                castShadow
+                            >
+                                <boxGeometry args={[0.035, bodyHeight * 1.1 + dome * 0.5, len]} />
+                                <meshStandardMaterial color="#0a0a0a" metalness={0.8} roughness={0.3} />
+                            </mesh>
+                            {/* Neon glow strip inside channel — alternating cyan/magenta */}
+                            <mesh
+                                position={[Math.sin(rad) * len / 2, dome * 0.05, Math.cos(rad) * len / 2]}
+                                rotation={[0, -rad, 0]}
+                            >
+                                <boxGeometry args={[0.018, bodyHeight * 0.5, len * 0.92]} />
+                                <meshStandardMaterial
+                                    color={idx % 2 === 0 ? color : (isDivine ? '#fff' : accentMagenta)}
+                                    emissive={idx % 2 === 0 ? color : (isDivine ? '#fff' : accentMagenta)}
+                                    emissiveIntensity={tier >= 3 ? 3 : 1.5}
+                                    toneMapped={false}
+                                />
+                            </mesh>
+                        </group>
+                    );
+                })}
 
-                {/* 3. Segmented Armor Plates (6 Segments) — Dark Metal */}
-                {[0, 60, 120, 180, 240, 300].map((angle, i) => (
-                    <group key={i} rotation={[0, angle * Math.PI / 180, 0]}>
-                        <mesh position={[0, 0, 0]}>
-                            <cylinderGeometry
-                                args={[bodyRadius + 0.02, bodyRadius + 0.02, bodyHeight * 0.85, 16, 1, false, -Math.PI / 6 + 0.1, Math.PI / 3 - 0.2]}
-                            />
-                            <meshStandardMaterial
-                                color={isFlashing ? "#fff" : "#1a1a1a"}
-                                metalness={0.85}
-                                roughness={0.15}
-                                emissive={color}
-                                emissiveIntensity={isFlashing ? 1 : 0.05}
-                            />
-                        </mesh>
-                        {/* Detail vents on plates */}
-                        <mesh position={[bodyRadius + 0.015, 0, 0]} rotation={[0, -Math.PI / 6 + 0.1, 0]}>
-                            <boxGeometry args={[0.05, bodyHeight * 0.5, 0.02]} />
-                            <meshStandardMaterial color="#111" />
-                        </mesh>
-                    </group>
-                ))}
+                {/* 3. Tiered Armor Plates (5-fold) — 3 layers of relief */}
+                {channelAngles.map((deg, i) => {
+                    const startAngle = (i * 2 * Math.PI / 5) + 0.06;
+                    return (
+                        <group key={`plate-${i}`}>
+                            {/* Outer raised plate — sits on the chassis */}
+                            <mesh position={[0, bodyHeight / 2 - 0.03 + dome * 0.3, 0]} castShadow>
+                                <cylinderGeometry
+                                    args={[bodyRadius * 1.04, bodyRadius * 1.04, 0.06, 24, 1, false, startAngle, plateArcSpan]}
+                                />
+                                {isEvolvingSymbiote ? (
+                                    <symbioteMaterial ref={symbioteRefPlates} />
+                                ) : (
+                                    <meshStandardMaterial
+                                        color={isFlashing ? '#fff' : goldDark}
+                                        metalness={0.92}
+                                        roughness={0.25}
+                                        emissive={color}
+                                        emissiveIntensity={isFlashing ? 1 : 0.02}
+                                    />
+                                )}
+                            </mesh>
+                            {/* Inner tiered ring — creates the stepped bevel */}
+                            <mesh position={[0, bodyHeight / 2 + dome * 0.35, 0]} castShadow>
+                                <cylinderGeometry
+                                    args={[bodyRadius * 0.72, bodyRadius * 0.72, 0.078, 20, 1, false, startAngle + 0.05, plateArcSpan - 0.1]}
+                                />
+                                <meshStandardMaterial
+                                    color={isFlashing ? '#fff' : (tier >= 4 ? goldColor : color)}
+                                    metalness={tier >= 2 ? 0.95 : 0.5}
+                                    roughness={tier >= 6 ? 0.1 : 0.4}
+                                />
+                            </mesh>
+                            {/* Top surface plateau — highest tier */}
+                            <mesh position={[0, bodyHeight / 2 + dome * 0.55, 0]} castShadow>
+                                <cylinderGeometry
+                                    args={[bodyRadius * 0.88, bodyRadius * 0.72, 0.03, 20, 1, false, startAngle + 0.03, plateArcSpan - 0.06]}
+                                />
+                                <meshStandardMaterial
+                                    color={isFlashing ? '#fff' : (tier >= 6 ? goldColor : color)}
+                                    metalness={tier >= 2 ? 0.95 : 0.5}
+                                    roughness={tier >= 6 ? 0.1 : 0.4}
+                                />
+                            </mesh>
+                            {/* Side armor skirt — thick barrel wall plates */}
+                            <mesh castShadow>
+                                <cylinderGeometry
+                                    args={[bodyRadius * 1.07, bodyRadius * 1.07, bodyHeight * 0.65, 20, 1, false, startAngle + 0.02, plateArcSpan - 0.04]}
+                                />
+                                <meshStandardMaterial
+                                    color={isFlashing ? '#fff' : goldDark}
+                                    metalness={0.92}
+                                    roughness={0.2}
+                                />
+                            </mesh>
+                        </group>
+                    );
+                })}
 
-                {/* 4. Top/Bottom Neon Rims (Circuit Lines) */}
-                <mesh position={[0, bodyHeight / 2 - 0.02, 0]} rotation={[Math.PI / 2, 0, 0]}>
-                    <torusGeometry args={[bodyRadius, 0.04, 16, 64]} />
-                    <meshBasicMaterial color={color} toneMapped={false} />
+                {/* 4. Equator neon rings */}
+                <mesh rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 1.08, 0.012, 8, 64]} />
+                    <meshBasicMaterial color={accentCyan} toneMapped={false} />
                 </mesh>
-                <mesh position={[0, -bodyHeight / 2 + 0.02, 0]} rotation={[Math.PI / 2, 0, 0]}>
-                    <torusGeometry args={[bodyRadius, 0.04, 16, 64]} />
-                    <meshBasicMaterial color={color} toneMapped={false} />
+                <mesh position={[0, -0.04, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 1.075, 0.008, 8, 64]} />
+                    <meshBasicMaterial color={accentMagenta} toneMapped={false} />
                 </mesh>
 
-                {/* 5. Top Face - Armor Plate with Icon */}
-                <group position={[0, bodyHeight / 2 + 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-                    {/* Metal Frame Ring */}
-                    <mesh>
-                        <ringGeometry args={[bodyRadius * 0.85, bodyRadius * 1.1, 64]} />
-                        <meshStandardMaterial color="#222" metalness={0.9} roughness={0.2} />
-                    </mesh>
+                {/* 5. Top & Bottom rim bands */}
+                <mesh position={[0, bodyHeight / 2 - 0.01, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 1.01, 0.025, 12, 64]} />
+                    <meshStandardMaterial color={goldDark} metalness={0.92} roughness={0.15} />
+                </mesh>
+                <mesh position={[0, -bodyHeight / 2 + 0.01, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 1.01, 0.025, 12, 64]} />
+                    <meshStandardMaterial color={goldDark} metalness={0.92} roughness={0.15} />
+                </mesh>
 
+                {/* 6. Central Emblem Socket — recessed disc with glow border */}
+                <mesh position={[0, bodyHeight / 2 + dome * 0.92, 0]} castShadow>
+                    <cylinderGeometry args={[bodyRadius * 0.28, bodyRadius * 0.28, 0.02, 32]} />
+                    <meshStandardMaterial color={goldColor} metalness={0.98} roughness={0.08} />
+                </mesh>
+                <mesh position={[0, bodyHeight / 2 + dome * 0.88, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 0.3, 0.018, 8, 32]} />
+                    <meshStandardMaterial color={goldDark} metalness={0.92} roughness={0.15} />
+                </mesh>
+                <mesh position={[0, bodyHeight / 2 + dome * 0.85, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 0.32, 0.008, 8, 32]} />
+                    <meshStandardMaterial color={accentCyan} emissive={accentCyan} emissiveIntensity={2} toneMapped={false} />
+                </mesh>
+                {/* Outer octagonal frame */}
+                <mesh position={[0, bodyHeight / 2 + dome * 0.7, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <torusGeometry args={[bodyRadius * 0.42, 0.015, 8, 8]} />
+                    <meshStandardMaterial color={goldColor} metalness={0.95} roughness={0.1} />
+                </mesh>
+
+                {/* 7. Top Face — Icon Surface */}
+                <group position={[0, bodyHeight / 2 + dome * 0.6, 0]} rotation={[-Math.PI / 2, 0, 0]}>
                     {/* The Icon Surface */}
                     <mesh position={[0, 0, 0.01]}>
-                        <circleGeometry args={[bodyRadius * 0.85, 32]} />
+                        <circleGeometry args={[bodyRadius * 0.55, 32]} />
                         {isMystery ? (
                             <mysteryMaterial ref={shaderRef} map={iconTexture} transparent />
+                        ) : isEvolvingSymbiote ? (
+                            <symbioteMaterial ref={symbioteRefTop} map={iconTexture} transparent />
                         ) : isDivine ? (
                             <divineMaterial ref={shaderRef} map={iconTexture} transparent />
                         ) : isCosmic ? (
@@ -784,30 +1205,86 @@ export default function Puck({
                             />
                         )}
                     </mesh>
-
-                    {/* Circuit Overlays on Top */}
-                    <mesh position={[0, 0, 0.02]}>
-                        <ringGeometry args={[bodyRadius * 0.8, bodyRadius * 0.82, 64]} />
-                        <meshBasicMaterial color={color} transparent opacity={0.5} />
-                    </mesh>
                 </group>
 
-                {/* 6. Bottom Detail — Player Color Glow */}
-                <mesh position={[0, -bodyHeight / 2 - 0.01, 0]} rotation={[Math.PI / 2, 0, 0]}>
-                    <circleGeometry args={[bodyRadius * 0.85, 32]} />
+                {/* 8. Bolt heads on plates */}
+                {channelAngles.map((deg, i) => {
+                    const midAngle = (i * 2 * Math.PI / 5) + Math.PI / 5;
+                    return (
+                        <group key={`bolt-${i}`}>
+                            <mesh
+                                position={[Math.sin(midAngle) * bodyRadius * 0.85, bodyHeight / 2 + dome * 0.55, Math.cos(midAngle) * bodyRadius * 0.85]}
+                                castShadow
+                            >
+                                <cylinderGeometry args={[0.02, 0.02, 0.025, 6]} />
+                                <meshStandardMaterial color="#444" metalness={0.95} roughness={0.05} />
+                            </mesh>
+                            {/* Vent slits on barrel */}
+                            <mesh
+                                position={[Math.sin(midAngle) * bodyRadius * 1.06, bodyHeight * 0.1, Math.cos(midAngle) * bodyRadius * 1.06]}
+                                rotation={[0, -midAngle, 0]}
+                            >
+                                <boxGeometry args={[0.08, 0.015, 0.008]} />
+                                <meshStandardMaterial color="#0a0a0a" metalness={0.8} roughness={0.3} />
+                            </mesh>
+                            <mesh
+                                position={[Math.sin(midAngle) * bodyRadius * 1.06, -bodyHeight * 0.08, Math.cos(midAngle) * bodyRadius * 1.06]}
+                                rotation={[0, -midAngle, 0]}
+                            >
+                                <boxGeometry args={[0.08, 0.015, 0.008]} />
+                                <meshStandardMaterial color="#0a0a0a" metalness={0.8} roughness={0.3} />
+                            </mesh>
+                        </group>
+                    );
+                })}
+
+                {/* 9. Bottom Face — Dark mirror with color glow */}
+                <mesh position={[0, -bodyHeight / 2 - 0.005, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                    <circleGeometry args={[bodyRadius * 0.9, 32]} />
                     <meshStandardMaterial
                         color="#111111"
                         metalness={0.9}
                         roughness={0.1}
                         emissive={color}
-                        emissiveIntensity={0.3}
+                        emissiveIntensity={0.15}
                     />
                 </mesh>
-                <mesh position={[0, -bodyHeight / 2 - 0.02, 0]} rotation={[Math.PI / 2, 0, 0]}>
-                    <ringGeometry args={[bodyRadius * 0.6, bodyRadius * 0.9, 32]} />
-                    <meshBasicMaterial color={color} transparent opacity={0.4} toneMapped={false} />
-                </mesh>
             </group>
+
+            {/* Player Name / Damage Tag */}
+            {!isGhost && (
+                <Html position={[0, 1.2 * puckScale, 0]} center style={{ pointerEvents: 'none', transition: 'all 0.1s' }}>
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        background: 'rgba(0,0,0,0.6)', padding: '4px 10px',
+                        borderRadius: '20px', border: `1px solid ${color}`,
+                        backdropFilter: 'blur(4px)', fontFamily: '"Orbitron", sans-serif',
+                        whiteSpace: 'nowrap', transform: 'scale(0.8)'
+                    }}>
+                        {iconPath && (
+                            <div style={{
+                                width: '20px', height: '20px', borderRadius: '50%',
+                                backgroundImage: `url(${iconPath})`, backgroundSize: 'cover',
+                                border: `2px solid ${color}`
+                            }} />
+                        )}
+                        <span style={{ color: '#fff', fontWeight: 600, fontSize: '14px', textShadow: `0 0 5px ${color}` }}>
+                            {playerName}
+                        </span>
+                        <span style={{
+                            color: damage >= 100 ? '#ff3333' : '#fff',
+                            fontWeight: 900, fontSize: '14px', marginLeft: '4px'
+                        }}>
+                            {damage}%
+                        </span>
+                    </div>
+                </Html>
+            )}
+
+            {isStunned && <StunEffect position={[0, 1.2, 0]} active={isStunned} />}
+            {parryEvent && <ParryEffect position={[0, 0, 0]} active={true} />}
+            {/* Hit Feedback Sparks */}
+            <CollisionSparks sparks={sparkEvents} />
         </group>
     );
 }

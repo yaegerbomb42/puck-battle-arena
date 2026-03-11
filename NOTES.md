@@ -28,3 +28,34 @@
 - Users can also choose "Play Offline"
 - `BattleArena` receives `forceOffline` prop when in offline mode
 - "Login to Save Progress" link appears inside BattleArena for offline users
+
+### Loadout System (Refactored Feb 2026)
+
+- **1/2/3 keybinds** activate powerup slots directly (no more random refresh)
+- Cooldowns stored in `powerupCooldowns` state as `{ [playerId_itemId]: { end, duration } }`
+- `executePowerup()` is the shared core; used by both map pickups (spacebar) and loadout slots
+- `GameHUD` uses a `requestAnimationFrame` loop for smooth cooldown bar rendering
+- Powerup info lives in `src/utils/powerups.js` — each has a `cooldown` field (default 5000ms)
+
+### Game Start Countdown
+
+- 3-2-1-GO overlay freezes physics and pauses game timer until countdown finishes
+- `startCountdown` state: `3 → 2 → 1 → 'GO!' → null`
+- Timer only begins after countdown ends (see `endTimeRef.current` reset)
+
+### Damage Decay
+
+- Only active when `modeConfig.damageDecay === true` (currently only "timed" mode)
+- Heals 1 damage per 200ms tick after 3 seconds without taking damage
+- `lastDamageTimeRef` tracks per-player last damage timestamps
+
+### Offline Win Condition
+
+- `reportGameEnd` in `useMultiplayer.js` now handles `isOffline` by setting `gameState='finished'`
+- Previously silently failed because it required a socket
+
+### Collision Sparks
+
+- `CollisionSparks` / `SparkBurst` components in `Puck.jsx` use InstancedMesh
+- Sparks emit at contact midpoint on puck-to-puck hits
+- Auto-removed after 800ms via setTimeout

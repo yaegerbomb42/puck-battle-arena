@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import CONFIG from '../utils/config';
 
@@ -48,9 +48,37 @@ export function useMultiplayer() {
         setPlayerId('offline_p1');
         setPlayerColor('#00d4ff');
         setPlayerIndex(0);
+        const localSkin = {
+            skinId: parseInt(localStorage.getItem('equipped_skin') || '1001'),
+            skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+            color: localStorage.getItem('player_color') || '#00d4ff'
+        };
+
+        // Random bot skin (High Tier Rare/Epic/Legendary)
+        const botTier = Math.floor(Math.random() * 5) + 3; // Tier 3-7
+        const botSkinId = 1 + Math.floor(Math.random() * 150);
+
         setPlayers([
-            { id: 'offline_p1', name: 'Player 1', color: '#00d4ff', ready: false, isLocal: true },
-            { id: 'offline_bot', name: 'BOT', color: '#ff006e', ready: true, isBot: true }
+            { 
+                id: 'offline_p1', 
+                name: 'Player 1', 
+                color: localSkin.color, 
+                ready: false, 
+                isLocal: true,
+                skinId: localSkin.skinId,
+                skinTier: localSkin.skinTier,
+                tier: localSkin.skinTier
+            },
+            { 
+                id: 'offline_bot', 
+                name: 'BOT', 
+                color: '#ff006e', 
+                ready: true, 
+                isBot: true,
+                skinId: botSkinId,
+                skinTier: botTier,
+                tier: botTier
+            }
         ]);
         setRoomCode('OFFLINE');
     }, []);
@@ -95,7 +123,12 @@ export function useMultiplayer() {
                 newSocket.emit('joinRoom', {
                     roomCode: savedRoom,
                     playerName: savedName,
-                    playerId: savedId // Sending ID hints to server this is a rejoin
+                    playerId: savedId, // Sending ID hints to server this is a rejoin
+                    skinData: {
+                        skinId: localStorage.getItem('equipped_skin'),
+                        skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                        color: localStorage.getItem('player_color') || '#00d4ff'
+                    }
                 }, (response) => {
                     if (response.success) {
                         console.log('✅ Session recovered!');
@@ -234,28 +267,61 @@ export function useMultiplayer() {
     // ========== ROOM ACTIONS ==========
 
     const createRoom = useCallback((playerName, userEmail) => {
-        if (!socket) return;
-        socket.emit('createRoom', { playerName, userEmail }, (response) => {
-            if (response.success) {
-                setRoomCode(response.roomCode);
-                setPlayerId(response.playerId);
-                setPlayerColor(response.color);
-                setPlayerIndex(response.playerIndex);
-                setPlayers(response.players);
-                setGameState('lobby');
+        if (isOffline) {
+            enableOfflineMode();
+            return Promise.resolve({ success: true, roomCode: 'OFFLINE' });
+        }
+        if (!socket) return Promise.reject('Not connected to server.');
 
-                // Persist session
-                localStorage.setItem(CONFIG.STORAGE_KEYS.ROOM_CODE, response.roomCode);
-                localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_ID, response.playerId);
-                localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_NAME, playerName);
-            }
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject('Server Timeout: Failed to create room'), 5000);
+
+            const skinData = {
+                skinId: localStorage.getItem('equipped_skin'),
+                skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                color: playerColor
+            };
+
+            socket.emit('createRoom', { playerName, userEmail, skinData }, (response) => {
+                clearTimeout(timeout);
+                if (response.success) {
+                    setRoomCode(response.roomCode);
+                    setPlayerId(response.playerId);
+                    setPlayerColor(response.color);
+                    setPlayerIndex(response.playerIndex);
+                    setPlayers(response.players);
+                    setGameState('lobby');
+
+                    // Persist session
+                    localStorage.setItem(CONFIG.STORAGE_KEYS.ROOM_CODE, response.roomCode);
+                    localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_ID, response.playerId);
+                    localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_NAME, playerName);
+                    resolve(response);
+                } else {
+                    reject(response.error || 'Failed to create room');
+                }
+            });
         });
-    }, [socket]);
+    }, [socket, isOffline, enableOfflineMode, playerColor]);
 
     const joinRoom = useCallback((code, playerName, userEmail) => {
-        if (!socket) return Promise.reject('Not connected');
+        if (code === 'sandbox' || code === 'OFFLINE') {
+            enableOfflineMode();
+            return Promise.resolve({ success: true, roomCode: 'OFFLINE' });
+        }
+        if (!socket) return Promise.reject('Not connected to server. Play offline or try again.');
+
         return new Promise((resolve, reject) => {
-            socket.emit('joinRoom', { roomCode: code, playerName, userEmail }, (response) => {
+            const timeout = setTimeout(() => reject('Server Timeout: Room not found or server unresponsive'), 5000);
+
+            const skinData = {
+                skinId: localStorage.getItem('equipped_skin'),
+                skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                color: playerColor
+            };
+
+            socket.emit('joinRoom', { roomCode: code, playerName, userEmail, skinData }, (response) => {
+                clearTimeout(timeout);
                 if (response.success) {
                     setRoomCode(response.roomCode);
                     setPlayerId(response.playerId);
@@ -271,25 +337,44 @@ export function useMultiplayer() {
 
                     resolve(response);
                 } else {
-                    reject(response.error);
+                    reject(response.error || 'Room not found');
                 }
             });
         });
-    }, [socket]);
+    }, [socket, enableOfflineMode, playerColor]);
 
     const quickJoin = useCallback((playerName, userEmail) => {
-        if (!socket) return;
-        socket.emit('quickJoin', { playerName, userEmail }, (response) => {
-            if (response.success) {
-                setRoomCode(response.roomCode);
-                setPlayerId(response.playerId);
-                setPlayerColor(response.color);
-                setPlayerIndex(response.playerIndex);
-                setPlayers(response.players);
-                setGameState('lobby');
-            }
+        if (isOffline) {
+            enableOfflineMode();
+            return Promise.resolve({ success: true, roomCode: 'OFFLINE' });
+        }
+        if (!socket) return Promise.reject('Not connected to server.');
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject('Server Timeout: Matchmaking unavailable'), 5000);
+
+            const skinData = {
+                skinId: localStorage.getItem('equipped_skin'),
+                skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                color: playerColor
+            };
+
+            socket.emit('quickJoin', { playerName, userEmail, skinData }, (response) => {
+                clearTimeout(timeout);
+                if (response.success) {
+                    setRoomCode(response.roomCode);
+                    setPlayerId(response.playerId);
+                    setPlayerColor(response.color);
+                    setPlayerIndex(response.playerIndex);
+                    setPlayers(response.players);
+                    setGameState('lobby');
+                    resolve(response);
+                } else {
+                    reject(response.error || 'Matchmaking failed');
+                }
+            });
         });
-    }, [socket]);
+    }, [socket, isOffline, enableOfflineMode, playerColor]);
 
     const setReady = useCallback((ready) => {
         if (isOffline) {
@@ -395,9 +480,15 @@ export function useMultiplayer() {
     }, [socket]);
 
     const reportGameEnd = useCallback((winnerId, finalScores, stats) => {
+        if (isOffline) {
+            setGameState('finished');
+            setWinner(winnerId);
+            setScores(finalScores || {});
+            return;
+        }
         if (!socket) return;
         socket.emit('reportGameEnd', { winnerId, scores: finalScores, stats });
-    }, [socket]);
+    }, [socket, isOffline]);
 
     const requestRematch = useCallback(() => {
         // Reset local state for new game
@@ -407,8 +498,26 @@ export function useMultiplayer() {
             // Offline: go back to lobby, player can ready up again
             setGameState('lobby');
             setPlayers([
-                { id: 'offline_p1', name: 'Player 1', color: '#00d4ff', ready: false, isLocal: true },
-                { id: 'offline_bot', name: 'BOT', color: '#ff006e', ready: true, isBot: true }
+                { 
+                    id: 'offline_p1', 
+                    name: 'Player 1', 
+                    color: localStorage.getItem('player_color') || '#00d4ff', 
+                    ready: false, 
+                    isLocal: true,
+                    skinId: parseInt(localStorage.getItem('equipped_skin') || '1001'),
+                    skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                    tier: parseInt(localStorage.getItem('equipped_skin_tier') || '0')
+                },
+                { 
+                    id: 'offline_bot', 
+                    name: 'BOT', 
+                    color: '#ff006e', 
+                    ready: true, 
+                    isBot: true,
+                    skinId: 1 + Math.floor(Math.random() * 150),
+                    skinTier: Math.floor(Math.random() * 4) + 3, // Tier 3-6
+                    tier: Math.floor(Math.random() * 4) + 3
+                }
             ]);
             setSeed(null);
             return;
@@ -436,7 +545,7 @@ export function useMultiplayer() {
         handlersRef.current = handlers;
     }, []);
 
-    return {
+    return useMemo(() => ({
         // Connection state
         connected,
         socket,
@@ -455,14 +564,14 @@ export function useMultiplayer() {
         selectedMode,
         seed,
         mapVotes,
-        timer, // <--- Exposed to component
+        timer,
 
         // Offline / Error status
         connectionError,
         isOffline,
         enableOfflineMode,
-        serverMessage, // <--- Exposed
-        triggerTestMaintenance, // <--- [NEW]
+        serverMessage,
+        triggerTestMaintenance,
 
         // Spectator Mode
         isSpectating,
@@ -493,5 +602,14 @@ export function useMultiplayer() {
 
         // Handlers
         registerHandlers
-    };
+    }), [
+        connected, socket, roomCode, playerId, playerColor, playerIndex, players,
+        gameState, scores, serverPowerups, winner, selectedMap, selectedMode,
+        seed, mapVotes, timer, connectionError, isOffline, enableOfflineMode,
+        serverMessage, triggerTestMaintenance, isSpectating, spectatorRoomId,
+        joinAsSpectator, exitSpectator, createRoom, joinRoom, quickJoin,
+        setReady, leaveRoom, voteMap, selectMode, sendPosition,
+        reportKnockout, reportStomp, reportDamage, collectPowerup,
+        usePowerup, reportGameEnd, requestRematch, registerHandlers
+    ]);
 }

@@ -362,6 +362,23 @@ class AudioManager {
             this.ambientGain = null;
         }
     }
+    setMasterVolume(val) {
+        if (this.masterGain) {
+            this.masterGain.gain.setTargetAtTime(val, this.ctx.currentTime, 0.1);
+        }
+    }
+
+    setMusicVolume(val) {
+        if (this.musicGain) {
+            this.musicGain.gain.setTargetAtTime(val, this.ctx.currentTime, 0.1);
+        }
+    }
+
+    setSFXVolume(val) {
+        if (this.sfxGain) {
+            this.sfxGain.gain.setTargetAtTime(val, this.ctx.currentTime, 0.1);
+        }
+    }
 }
 
 export const audio = new AudioManager();

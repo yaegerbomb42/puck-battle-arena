@@ -32,9 +32,10 @@ export default function Lobby({
     gameMode,
     onSelectMode,
     mapVotes,
-    onTestMaintenance // [NEW]
+    onTestMaintenance, // [NEW]
+    onShowSettings
 }) {
-    const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, updateLoadout, setActiveLoadout, updateUsername, loading, joinWagerMatch } = useAuth();
+    const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, updateLoadout, setActiveLoadout, updateUsername, loading, joinWagerMatch, isAdmin } = useAuth();
 
     const [showStore, setShowStore] = useState(false);
     const [showLoadout, setShowLoadout] = useState(false);
@@ -223,7 +224,7 @@ export default function Lobby({
             {/* Auth Modal */}
             {showAuthModal && (
                 <div className="auth-modal-overlay" onClick={() => setShowAuthModal(false)}>
-                    <div className="auth-modal" onClick={e => e.stopPropagation()}>
+                    <div className="auth-modal glass-dark" onClick={e => e.stopPropagation()}>
                         <h2>{authMode === 'login' ? 'SIGN IN' : 'CREATE ACCOUNT'}</h2>
                         <form onSubmit={handleAuth}>
                             <input
@@ -259,14 +260,17 @@ export default function Lobby({
                 </div>
             )}
 
-            <div className="lobby-container">
+            <div className="lobby-container glass-dark" style={{ padding: '3rem 2rem', borderTop: '1px solid rgba(255,255,255,0.2)', boxShadow: '0 0 50px rgba(0,212,255,0.1)' }}>
                 {/* User Bar */}
                 <div style={{ position: 'absolute', top: '1rem', right: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div className="active-players-pill" title="Players Online">
                         <span className="live-dot">●</span>
                         {activePlayers} Online
                     </div>
-                    <button className="btn-admin-hidden" onClick={() => { audio.playClick(); setShowAdmin(true); }}>⚙️</button>
+                    <button className="btn-settings" onClick={() => { audio.playClick(); onShowSettings(); }} title="Settings">⚙️</button>
+                    {isAdmin && (
+                        <button className="btn-admin-hidden" onClick={() => { audio.playClick(); setShowAdmin(true); }} style={{ opacity: 0.2 }}>🛠️</button>
+                    )}
                     {user && (
                         <>
                             <div className="zoin-wallet-widget" title="My Stash (Zoins)">
@@ -332,7 +336,7 @@ export default function Lobby({
                             <input
                                 type="text"
                                 placeholder="ENTER YOUR NAME"
-                                className={`name-input ${user ? 'verified' : ''}`}
+                                className={`name-input glass ${user ? 'verified' : ''}`}
                                 value={playerName}
                                 onChange={handleNameChange}
                                 onBlur={saveName} // Save on blur
@@ -482,9 +486,9 @@ export default function Lobby({
                 ) : (
                     <div className="room-view">
                         <h2>ROOM CODE</h2>
-                        <div className="room-code">{roomCode}</div>
+                        <div className="room-code glow-blue">{roomCode}</div>
 
-                        <div className="player-list">
+                        <div className="player-list glass" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)' }}>
                             <div className="player-count">Players ({players.length}/10)</div>
                             {players.map((p, i) => (
                                 <div key={p.id} className={`player-item ${p.id === playerId ? 'local' : ''}`}>
@@ -532,7 +536,7 @@ export default function Lobby({
                                 {getVotingOptions(roomCode).map(biome => (
                                     <div
                                         key={biome.id}
-                                        className={`map-card ${selectedMap === biome.id ? 'selected' : ''}`}
+                                        className={`map-card glass ${selectedMap === biome.id ? 'selected neon-border-blue' : ''}`}
                                         onClick={() => { audio.playClick(); onVoteMap && onVoteMap(biome.id); }}
                                     >
                                         <div className="map-preview" style={{ background: `linear-gradient(45deg, ${biome.colors.floor}, ${biome.colors.accent})` }}>
@@ -607,11 +611,14 @@ export default function Lobby({
                 }
                 .btn-login { background: linear-gradient(45deg, #00d4ff, #00ff87); color: #000; }
                 .btn-wager { background: linear-gradient(45deg, #ff006e, #ffd700); color: #000; border: none; cursor: pointer; animation: pulse 1.5s infinite; }
-                .btn-admin-hidden {
-                    opacity: 0.3; background: none; border: none; cursor: pointer;
-                    font-size: 1rem; padding: 0.5rem;
-                }
                 .btn-admin-hidden:hover { opacity: 1; }
+                .btn-settings {
+                    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+                    border-radius: 50%; width: 40px; height: 40px; display: flex;
+                    align-items: center; justify-content: center; cursor: pointer;
+                    color: white; font-size: 1.2rem; transition: all 0.3s;
+                }
+                .btn-settings:hover { background: rgba(0,212,255,0.2); border-color: #00d4ff; transform: rotate(45deg); }
 
                 .btn-admin-hidden:hover { opacity: 1; }
 
@@ -735,7 +742,7 @@ export default function Lobby({
                     display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
                 }
                 .name-input { 
-                    padding: 12px 20px; background: rgba(0,0,0,0.5); 
+                    padding: 12px 20px;
                     border: 2px solid #333; color: white; text-align: center;
                     border-radius: 30px; width: 100%;
                     font-size: 1rem; transition: all 0.3s;
@@ -772,7 +779,7 @@ export default function Lobby({
 
                 .join-form { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
                 .join-form input { 
-                    flex: 1; padding: 10px; background: rgba(0,0,0,0.5);
+                    flex: 1; padding: 10px;
                     border: 1px solid #555; color: white; text-align: center;
                     border-radius: 8px; text-transform: uppercase;
                 }
@@ -891,14 +898,14 @@ export default function Lobby({
                     z-index: 1000;
                 }
                 .auth-modal {
-                    background: #1a1a2e; padding: 2rem; border-radius: 20px;
+                    padding: 2rem; border-radius: 20px;
                     width: 100%; max-width: 350px; text-align: center;
                     border: 1px solid #333;
                 }
                 .auth-modal h2 { margin-bottom: 1.5rem; color: #00d4ff; }
                 .auth-modal form { display: flex; flex-direction: column; gap: 1rem; }
                 .auth-modal input {
-                    padding: 12px; background: #0a0a1a; border: 1px solid #333;
+                    padding: 12px; border: 1px solid #333;
                     color: white; border-radius: 8px;
                 }
                 .auth-error { color: #ff006e; font-size: 0.85rem; }
@@ -956,7 +963,7 @@ export default function Lobby({
                     letter-spacing: 0.5rem; margin: 1rem 0;
                 }
                 .player-list { 
-                    background: rgba(0,0,0,0.3); border-radius: 15px; 
+                    border-radius: 15px; 
                     padding: 1rem; margin: 1rem 0;
                 }
                 .error-container { display: flex; flex-direction: column; gap: 1rem; align-items: center; }
@@ -996,7 +1003,7 @@ export default function Lobby({
                 .vote-options.offline-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
                 
                 .map-card {
-                    background: rgba(255,255,255,0.03); border-radius: 12px; overflow: hidden;
+                    border-radius: 12px; overflow: hidden;
                     cursor: pointer; transition: all 0.3s; border: 2px solid transparent;
                 }
                 .map-card:hover { background: rgba(255,255,255,0.08); transform: translateY(-5px); }

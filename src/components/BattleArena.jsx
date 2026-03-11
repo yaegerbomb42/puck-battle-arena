@@ -24,6 +24,7 @@ import SandboxControls from './UI/SandboxControls';
 import MaintenanceOverlay from './UI/MaintenanceOverlay';
 import ControllerHints from './UI/ControllerHints';
 import LoadingScreen from './UI/LoadingScreen';
+import SettingsMenu from './UI/SettingsMenu';
 
 import { useMultiplayer } from '../hooks/useMultiplayer';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +35,7 @@ import { GAME_MODES } from '../utils/gameModes';
 import { analytics } from '../utils/analytics';
 import { audio } from '../utils/audio';
 import { getPowerupInfo, DEFAULT_LOADOUT } from '../utils/powerups';
+import { getIconById } from '../utils/economy';
 
 // ============================================
 // GAME SCENE COMPONENT
@@ -50,6 +52,7 @@ function GameScene({
     onCollectPowerup,
     onPositionUpdate,
     onUseItem,
+    onUseLoadoutItem,
     effects,
     onEffectComplete,
     mapData,
@@ -62,7 +65,9 @@ function GameScene({
     slowmo,
     gameMode,
     onInvincibleChange,
-    explosionEvent
+    explosionEvent,
+    projectileImpactEvent,
+    videoSettings
 }) {
     // [PERFORMANCE] Pause rendering when tab is hidden to save GPU/Battery
     const [isVisible, setIsVisible] = useState(true);
@@ -106,36 +111,50 @@ function GameScene({
                 ) : (
                     <ArenaChaos mapType={mapType} />
                 )}
-                <ContactShadows resolution={1024} scale={100} blur={2} opacity={0.5} far={10} color="#000000" />
+                {videoSettings.shadows !== false && (
+                    <ContactShadows resolution={1024} scale={100} blur={2} opacity={0.5} far={10} color="#000000" />
+                )}
                 <Sparkles count={400} scale={40} size={3} speed={0.4} opacity={0.4} color="#ffffff" />
             </group>
 
             {/* Players */}
-            {players.map((player, index) => (
-                <Puck
-                    key={player.id}
-                    playerId={player.id}
-                    playerName={player.name}
-                    color={player.color}
-                    startPosition={getSpawnPosition(index, mapData)}
-                    isLocalPlayer={player.id === localPlayerId}
-                    isBot={player.isBot || false}
-                    powerup={playerPowerups[player.id]}
-                    damage={playerDamage[player.id] || 0}
-                    onKnockout={onKnockout}
-                    onStomp={onStomp}
-                    onPositionUpdate={player.id === localPlayerId ? onPositionUpdate : undefined}
-                    onCollision={player.id === localPlayerId ? onCollision : undefined}
-                    onUseItem={player.id === localPlayerId ? onUseItem : undefined}
-                    onImpact={player.id === localPlayerId ? onImpact : undefined}
-                    isPaused={isPaused}
-                    remotePosition={player.id !== localPlayerId ? (playerPositions[player.id] || player.position) : undefined}
-                    remoteVelocity={player.id !== localPlayerId ? player.velocity : undefined}
-                    allPlayerPositions={playerPositions}
-                    gameMode={gameMode}
-                    onInvincibleChange={player.id === localPlayerId ? onInvincibleChange : undefined}
-                />
-            ))}
+            {players.map((player, index) => {
+                const iconData = getIconById(player.skinId);
+                const iconPath = iconData?.imageUrl || player.iconPath || '/images/logo.png';
+                const tier = player.tier || iconData?.tier || 1;
+                
+                return (
+                    <Puck
+                        key={player.id}
+                        playerId={player.id}
+                        playerName={player.name}
+                        color={player.color}
+                        startPosition={getSpawnPosition(index, mapData)}
+                        isLocalPlayer={player.id === localPlayerId}
+                        isBot={player.isBot || false}
+                        iconPath={iconPath}
+                        tier={tier}
+                        powerup={playerPowerups[player.id]}
+                        damage={playerDamage[player.id] || 0}
+                        onKnockout={onKnockout}
+                        onStomp={onStomp}
+                        onPositionUpdate={player.id === localPlayerId ? onPositionUpdate : undefined}
+                        onCollision={player.id === localPlayerId ? onCollision : undefined}
+                        onUseItem={player.id === localPlayerId ? onUseItem : undefined}
+                        onUseLoadoutItem={player.id === localPlayerId ? onUseLoadoutItem : undefined}
+                        onImpact={player.id === localPlayerId ? onImpact : undefined}
+                        isPaused={isPaused}
+                        remotePosition={player.id !== localPlayerId ? (playerPositions[player.id] || player.position) : undefined}
+                        remoteVelocity={player.id !== localPlayerId ? player.velocity : undefined}
+                        allPlayerPositions={playerPositions}
+                        gameMode={gameMode}
+                        skinTier={player.skinTier || 0}
+                        onInvincibleChange={player.id === localPlayerId ? onInvincibleChange : undefined}
+                        explosionEvent={explosionEvent}
+                        projectileImpactEvent={projectileImpactEvent}
+                    />
+                );
+            })}
 
             {/* Power-ups */}
             <PowerUps
@@ -159,8 +178,17 @@ function GameScene({
 
             {/* Post-processing (AAA Overhaul) */}
             <EffectComposer disableNormalPass>
-                <Bloom luminanceThreshold={1} mipmapBlur intensity={1.5} radius={0.6} />
-                <ChromaticAberration offset={[0.002, 0.002]} />
+                {videoSettings.bloom !== false && (
+                    <Bloom
+                        luminanceThreshold={1}
+                        mipmapBlur
+                        intensity={videoSettings.preset === 'low' ? 0.5 : 1.5}
+                        radius={0.6}
+                    />
+                )}
+                {videoSettings.chromaticAberration !== false && (
+                    <ChromaticAberration offset={[0.002, 0.002]} />
+                )}
                 <ToneMapping />
                 <Vignette eskil={false} offset={0.1} darkness={0.5} />
             </EffectComposer>
@@ -188,6 +216,7 @@ export default function BattleArena({ forceOffline }) {
     // mapSeed removed, using multiplayer.seed directly
     const [localPowerups, setLocalPowerups] = useState([]);
     const [playerPositions, setPlayerPositions] = useState({});
+    const [projectileImpactEvent, setProjectileImpactEvent] = useState(null);
     const [playerPowerups, setPlayerPowerups] = useState({});
     const [playerDamage, setPlayerDamage] = useState({});
     const [playerStocks, setPlayerStocks] = useState({});
@@ -199,11 +228,20 @@ export default function BattleArena({ forceOffline }) {
     const [knockoutTarget, setKnockoutTarget] = useState(null);
     const [explosionEvent, setExplosionEvent] = useState(null); // { position, force, timestamp }
 
+    const [showSettings, setShowSettings] = useState(false);
+    const [videoSettings, setVideoSettings] = useState(() => {
+        const saved = localStorage.getItem('puckoff_video_settings');
+        return saved ? JSON.parse(saved) : { bloom: true, shadows: true, chromaticAberration: true, preset: 'high' };
+    });
+
     // Visual effects
     const [isPaused, setIsPaused] = useState(false);
     const [screenShake, setScreenShake] = useState(0);
     const [slowmo, setSlowmo] = useState(false);
     const shakeDecayTimerRef = useRef(null);
+
+    // Game Start Countdown (Freeze before match)
+    const [startCountdown, setStartCountdown] = useState(3); // 3, 2, 1, 'GO!', null
 
     // Cleanup shake timer on unmount
     useEffect(() => {
@@ -226,11 +264,14 @@ export default function BattleArena({ forceOffline }) {
     });
     const [combo, setCombo] = useState(0);
     const lastHitTime = useRef(0);
+    const lastDamageTimeRef = useRef({}); // { playerId: timestamp }
 
-    // Replay system
     const replayRecorder = useReplayRecorder();
     const [activeReplay, setActiveReplay] = useState(null);
     const [showReplay, setShowReplay] = useState(false);
+
+    // Loadout Cooldowns: { [playerId_itemId]: { end: timestamp, duration: ms } }
+    const [powerupCooldowns, setPowerupCooldowns] = useState({});
 
     // Player state
     const [isInvincible, setIsInvincible] = useState(false);
@@ -315,9 +356,34 @@ export default function BattleArena({ forceOffline }) {
         }
     }, [multiplayer]);
 
-    // Timer Loop
+    // ========== INITIAL COUNTDOWN LOGIC ==========
     useEffect(() => {
         if (multiplayer.gameState !== 'playing') {
+            setStartCountdown(3);
+            return;
+        }
+
+        if (typeof startCountdown === 'number' && startCountdown > 0) {
+            const timer = setTimeout(() => {
+                setStartCountdown(prev => prev - 1);
+            }, 1000);
+            return () => clearTimeout(timer);
+        } else if (startCountdown === 0) {
+            setStartCountdown('GO!');
+            audio.playImpact(10); // Use impact sound for GO!
+
+            // Start the actual game timer now
+            if (modeConfig.timeLimit > 0) {
+                endTimeRef.current = Date.now() + modeConfig.timeLimit * 1000;
+            }
+
+            setTimeout(() => setStartCountdown(null), 1000);
+        }
+    }, [multiplayer.gameState, startCountdown, modeConfig.timeLimit]);
+
+    // Timer Loop
+    useEffect(() => {
+        if (multiplayer.gameState !== 'playing' || startCountdown !== null) {
             if (rafRef.current) cancelAnimationFrame(rafRef.current);
             return;
         }
@@ -356,18 +422,12 @@ export default function BattleArena({ forceOffline }) {
     }, [multiplayer.gameState, modeConfig.timeLimit, checkWinCondition]);
 
     // ========== WIN CONDITION CHECK ==========
-    // ========== USE ITEM HANDLER ==========
-    const handleUseItem = useCallback(() => {
-        const activePowerup = playerPowerups[multiplayer.playerId];
-        if (!activePowerup) return;
-
-        const playerPos = playerPositions[multiplayer.playerId];
+    // ========== POWERUP EXECUTION CORE ==========
+    const executePowerup = useCallback((powerupId, ownerId) => {
+        const playerPos = playerPositions[ownerId];
         if (!playerPos) return;
 
-        const powerupInfo = typeof activePowerup === 'string'
-            ? getPowerupInfo(activePowerup)
-            : activePowerup;
-
+        const powerupInfo = getPowerupInfo(powerupId);
         if (!powerupInfo) return;
 
         // Handle projectile powerups
@@ -378,19 +438,60 @@ export default function BattleArena({ forceOffline }) {
                 position: [playerPos[0], playerPos[1] + 0.5, playerPos[2]],
                 velocity: [0, 0, 8], // Forward
                 damage: powerupInfo.damage || 20,
-                ownerId: multiplayer.playerId
+                ownerId: ownerId
             }]);
         }
+
+        // Setup Buff Effects (handled later in update loop by effect duration)
+
+        if (multiplayer.connected && ownerId === multiplayer.playerId) {
+            multiplayer.usePowerup?.(powerupInfo.id);
+        }
+
+        return powerupInfo;
+    }, [playerPositions, multiplayer, getNextId]);
+
+    // ========== SPACEBAR: USE MAP POWERUP ==========
+    const handleUseItem = useCallback(() => {
+        const activePowerup = playerPowerups[multiplayer.playerId];
+        if (!activePowerup) return;
+
+        const powerupInfo = typeof activePowerup === 'string'
+            ? getPowerupInfo(activePowerup)
+            : activePowerup;
+
+        if (!powerupInfo) return;
+
+        executePowerup(powerupInfo.id, multiplayer.playerId);
 
         // Consume non-buff powerups
         if (powerupInfo.type !== 'buff') {
             setPlayerPowerups(prev => ({ ...prev, [multiplayer.playerId]: null }));
         }
+    }, [playerPowerups, multiplayer, executePowerup]);
 
-        if (multiplayer.connected) {
-            multiplayer.usePowerup?.(powerupInfo.id);
+    // ========== 1-2-3 KEYS: USE LOADOUT ITEM ==========
+    const handleUseLoadoutItem = useCallback((slotIndex) => {
+        const myLoadout = playerLoadouts[multiplayer.playerId] || DEFAULT_LOADOUT || ['speed_boost', 'rocket', 'shield'];
+        const itemId = myLoadout[slotIndex];
+        if (!itemId) return;
+
+        const now = Date.now();
+        const cdKey = `${multiplayer.playerId}_${itemId}`;
+        if (powerupCooldowns[cdKey] && now < powerupCooldowns[cdKey].end) {
+            return; // Still on cooldown
         }
-    }, [playerPowerups, playerPositions, multiplayer, getNextId]);
+
+        const info = executePowerup(itemId, multiplayer.playerId);
+        if (info) {
+            // Set cooldown
+            const cooldownTime = info.cooldown || 5000;
+            setPowerupCooldowns(prev => ({
+                ...prev,
+                [cdKey]: { end: now + cooldownTime, duration: cooldownTime }
+            }));
+        }
+    }, [playerLoadouts, multiplayer, powerupCooldowns, executePowerup]);
 
     // ========== IMPACT HANDLER ==========
     const handleImpact = useCallback((intensity) => {
@@ -435,12 +536,25 @@ export default function BattleArena({ forceOffline }) {
         playerDamageRef.current = playerDamage;
     }, [playerDamage]);
 
+    // ========== SYNC REMOTE DAMAGE ARRIVALS FOR DECAY ==========
+    useEffect(() => {
+        // Find which players took damage recently from remote sync
+        Object.entries(playerDamage).forEach(([id, dmg]) => {
+            const prevDmg = playerDamageRef.current[id] || 0;
+            if (dmg > prevDmg) {
+                lastDamageTimeRef.current[id] = Date.now();
+            }
+        });
+        playerDamageRef.current = playerDamage;
+    }, [playerDamage]);
+
     const handleCollision = useCallback((impactForce) => {
         const damage = Math.floor(impactForce * 2);
 
         setPlayerDamage(prev => {
             const current = prev[multiplayer.playerId] || 0;
             const newDamage = current + damage;
+            lastDamageTimeRef.current[multiplayer.playerId] = Date.now();
             return { ...prev, [multiplayer.playerId]: newDamage };
         });
 
@@ -458,10 +572,11 @@ export default function BattleArena({ forceOffline }) {
         const damage = calculateStompDamage(stompData.velocity || 10);
         logGame(`Stomp! Target: ${targetId} Damage: ${damage}`, 'warn');
 
-        setPlayerDamage(prev => ({
-            ...prev,
-            [targetId]: (prev[targetId] || 0) + damage
-        }));
+        setPlayerDamage(prev => {
+            const newDmg = (prev[targetId] || 0) + damage;
+            lastDamageTimeRef.current[targetId] = Date.now();
+            return { ...prev, [targetId]: newDmg };
+        });
 
         setMatchStats(s => ({ ...s, stomps: s.stomps + 1 }));
         handleImpact(15);
@@ -482,8 +597,8 @@ export default function BattleArena({ forceOffline }) {
     }, [playerPositions, multiplayer, handleImpact, getNextId]);
 
     // ========== KNOCKOUT HANDLER ==========
-    const handleKnockout = useCallback((knockedOutPlayerId) => {
-        logGame(`Knockout: ${knockedOutPlayerId}`, 'error');
+    const handleKnockout = useCallback((knockedOutPlayerId, killerId) => {
+        logGame(`Knockout: ${knockedOutPlayerId} by ${killerId || 'unknown'}`, 'error');
         const pos = playerPositions[knockedOutPlayerId] || [0, 0, 0];
         const player = multiplayer.players.find(p => p.id === knockedOutPlayerId);
         const color = player?.color || '#ffffff';
@@ -526,15 +641,14 @@ export default function BattleArena({ forceOffline }) {
             return newStocks;
         });
 
-        // Score for killer
-        multiplayer.players.forEach(p => {
-            if (p.id !== knockedOutPlayerId) {
-                setPlayerScores(prev => ({
-                    ...prev,
-                    [p.id]: (prev[p.id] || 0) + 1
-                }));
-            }
-        });
+        // Score for killer — ONLY the actual killer, not everyone
+        const scorerId = killerId && killerId !== knockedOutPlayerId ? killerId : multiplayer.playerId;
+        if (scorerId !== knockedOutPlayerId) {
+            setPlayerScores(prev => ({
+                ...prev,
+                [scorerId]: (prev[scorerId] || 0) + 1
+            }));
+        }
 
         // Reset damage
         setPlayerDamage(prev => ({ ...prev, [knockedOutPlayerId]: 0 }));
@@ -564,13 +678,13 @@ export default function BattleArena({ forceOffline }) {
     }, [playerPositions, multiplayer, modeConfig.stocksPerPlayer, getNextId, checkWinCondition, replayRecorder]);
 
     // ========== POSITION UPDATE ==========
-    const handlePositionUpdate = useCallback((position, velocity) => {
+    const handlePositionUpdate = useCallback((playerId, position, velocity) => {
         setPlayerPositions(prev => ({
             ...prev,
-            [multiplayer.playerId]: position
+            [playerId]: position
         }));
 
-        if (Math.random() < 0.25) {
+        if (playerId === multiplayer.playerId && Math.random() < 0.25) {
             multiplayer.sendPosition?.(position, velocity, 0);
         }
     }, [multiplayer]);
@@ -610,7 +724,7 @@ export default function BattleArena({ forceOffline }) {
     }, []);
 
     // ========== PROJECTILE HIT ==========
-    const handleProjectileHit = useCallback((projId, targetId, type, impactSpeed) => {
+    const handleProjectileHit = useCallback((projId, targetId, type, impactSpeed, ownerId) => {
         let damage = 20;
         if (type === 'rocket') damage = 35;
         if (type === 'bomb_throw') damage = 50;
@@ -625,6 +739,10 @@ export default function BattleArena({ forceOffline }) {
             ...prev,
             [targetId]: (prev[targetId] || 0) + damage
         }));
+
+        // [NEW] Attribute "Last Hit By" for knockouts
+        setProjectileImpactEvent({ targetId, ownerId, timestamp: Date.now() });
+        setTimeout(() => setProjectileImpactEvent(null), 500);
 
         setProjectiles(prev => prev.filter(p => p.id !== projId));
     }, []);
@@ -651,104 +769,43 @@ export default function BattleArena({ forceOffline }) {
         return () => clearInterval(spawnInterval);
     }, [multiplayer.gameState, multiplayer.connected, multiplayer.isOffline, localPowerups.length, modeConfig.powerupSpawnRate, mapData, getNextId]);
 
-    // ========== BOT AI (Offline Mode) ==========
+    // ========== DAMAGE DECAY LOOP ==========
     useEffect(() => {
-        if (!multiplayer.isOffline || multiplayer.gameState !== 'playing') return;
+        if (!modeConfig.damageDecay || multiplayer.gameState !== 'playing' || startCountdown !== null) return;
 
-        const BOT_ID = 'offline_bot';
-        const botState = { behavior: 'chase', timer: 0, orbitAngle: 0, dashCooldown: 0 };
+        const decayInterval = setInterval(() => {
+            const now = Date.now();
+            let changed = false;
 
-        const botLoop = setInterval(() => {
-            const playerPos = playerPositions[multiplayer.playerId];
-            const botPos = playerPositions[BOT_ID] || [5, 0.5, 0];
-
-            if (!playerPos) {
-                // Initialize bot position if needed
-                setPlayerPositions(prev => ({ ...prev, [BOT_ID]: [5, 0.5, 0] }));
-                return;
-            }
-
-            // Vector from bot to player
-            const dx = playerPos[0] - botPos[0];
-            const dz = playerPos[2] - botPos[2];
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            const dirX = dist > 0.1 ? dx / dist : 0;
-            const dirZ = dist > 0.1 ? dz / dist : 0;
-
-            let moveX = 0, moveZ = 0;
-            const speed = 0.12;
-
-            botState.timer++;
-            botState.dashCooldown = Math.max(0, botState.dashCooldown - 1);
-
-            // State machine
-            if (dist > 8) {
-                // Far away — chase
-                botState.behavior = 'chase';
-            } else if (dist < 3 && botState.dashCooldown <= 0) {
-                // Close enough — dash attack
-                botState.behavior = 'dash';
-                botState.dashCooldown = 60; // ~2 seconds
-            } else if (dist < 6) {
-                // Mid range — orbit
-                botState.behavior = 'orbit';
-            }
-
-            switch (botState.behavior) {
-                case 'chase':
-                    moveX = dirX * speed;
-                    moveZ = dirZ * speed;
-                    break;
-                case 'orbit':
-                    botState.orbitAngle += 0.06;
-                    moveX = dirX * speed * 0.3 + Math.cos(botState.orbitAngle) * speed * 0.8;
-                    moveZ = dirZ * speed * 0.3 + Math.sin(botState.orbitAngle) * speed * 0.8;
-                    break;
-                case 'dash':
-                    moveX = dirX * speed * 3;
-                    moveZ = dirZ * speed * 3;
-                    // Reset to orbit after one tick of dash
-                    botState.behavior = 'orbit';
-                    break;
-                default:
-                    break;
-            }
-
-            // Add slight randomness for unpredictability
-            moveX += (Math.random() - 0.5) * 0.03;
-            moveZ += (Math.random() - 0.5) * 0.03;
-
-            // Clamp to arena bounds
-            const newX = Math.max(-12, Math.min(12, botPos[0] + moveX));
-            const newZ = Math.max(-12, Math.min(12, botPos[2] + moveZ));
-
-            setPlayerPositions(prev => ({
-                ...prev,
-                [BOT_ID]: [newX, 0.5, newZ]
-            }));
-        }, 33); // ~30fps bot tick
-
-        return () => clearInterval(botLoop);
-    }, [multiplayer.isOffline, multiplayer.gameState, multiplayer.playerId, playerPositions]);
-
-    // ========== LOADOUT POWERUP REFRESH ==========
-    useEffect(() => {
-        if (multiplayer.gameState !== 'playing') return;
-
-        const refreshInterval = setInterval(() => {
-            setPlayerPowerups(prev => {
-                if (prev[multiplayer.playerId]) return prev;
-
-                const myLoadout = playerLoadouts[multiplayer.playerId] || DEFAULT_LOADOUT || ['speed_boost', 'rocket', 'shield'];
-                const randomId = myLoadout[Math.floor(Math.random() * myLoadout.length)];
-                const info = getPowerupInfo(randomId);
-
-                return { ...prev, [multiplayer.playerId]: info };
+            setPlayerDamage(prev => {
+                const newDamage = { ...prev };
+                Object.entries(newDamage).forEach(([id, dmg]) => {
+                    const lastHit = lastDamageTimeRef.current[id] || now;
+                    // If no damage taken in last 3 seconds, heal 1 damage per tick (5 DPS at 200ms)
+                    if (dmg > 0 && now - lastHit > 3000) {
+                        newDamage[id] = Math.max(0, dmg - 1);
+                        changed = true;
+                    }
+                });
+                return changed ? newDamage : prev;
             });
-        }, 5000);
 
-        return () => clearInterval(refreshInterval);
-    }, [multiplayer.gameState, multiplayer.playerId, playerLoadouts]);
+            // Only local player reports to server
+            if (changed && multiplayer.connected && playerDamageRef.current[multiplayer.playerId] > 0) {
+                const myLastHit = lastDamageTimeRef.current[multiplayer.playerId] || now;
+                if (now - myLastHit > 3000) {
+                    // We don't spam network every 200ms, rely on clients predicting decay 
+                    // or sync next time we hit
+                }
+            }
+
+        }, 200);
+
+        return () => clearInterval(decayInterval);
+    }, [modeConfig.damageDecay, multiplayer.gameState, startCountdown, multiplayer.connected, multiplayer.playerId]);
+
+    // ========== LOADOUT POWERUP SYSTEM OVERHAULED ==========
+    // Previously random refresh. Now uses 1, 2, 3 cooldown slots.
 
     // ========== MULTIPLAYER HANDLERS ==========
     useEffect(() => {
@@ -825,6 +882,7 @@ export default function BattleArena({ forceOffline }) {
                     connectionError={multiplayer.connectionError}
                     onPlayOffline={multiplayer.enableOfflineMode}
                     onTestMaintenance={multiplayer.triggerTestMaintenance}
+                    onShowSettings={() => setShowSettings(true)}
                 />
             );
         }
@@ -912,7 +970,13 @@ export default function BattleArena({ forceOffline }) {
                 gl={{ antialias: true, alpha: false }}
             >
                 <Suspense fallback={<Html center><LoadingScreen /></Html>}>
-                    <Physics gravity={PHYSICS_CONFIG.gravity} step={1 / 60} broadphase="SAP" allowSleep>
+                    <Physics 
+                        gravity={PHYSICS_CONFIG.gravity} 
+                        step={1 / 120} 
+                        substeps={4} 
+                        broadphase="SAP" 
+                        allowSleep
+                    >
                         {multiplayer.gameState === 'playing' && (
                             <>
                                 <GameScene
@@ -928,18 +992,21 @@ export default function BattleArena({ forceOffline }) {
                                     onPositionUpdate={handlePositionUpdate}
                                     onCollision={handleCollision}
                                     onUseItem={handleUseItem}
+                                    onUseLoadoutItem={handleUseLoadoutItem}
                                     effects={effects}
                                     onEffectComplete={handleEffectComplete}
                                     mapData={mapData}
                                     mapType={multiplayer.selectedMap}
                                     onImpact={handleImpact}
-                                    isPaused={isPaused}
+                                    isPaused={isPaused || startCountdown !== null} // Freeze physics
                                     screenShake={screenShake}
                                     knockoutTarget={knockoutTarget}
                                     slowmo={slowmo}
                                     gameMode={gameMode}
                                     onInvincibleChange={setIsInvincible}
-                                    explosionEvent={explosionEvent} // NEW PROP
+                                    explosionEvent={explosionEvent}
+                                    projectileImpactEvent={projectileImpactEvent}
+                                    videoSettings={videoSettings}
                                 />
                                 <ProjectileSystem
                                     projectiles={projectiles}
@@ -967,6 +1034,7 @@ export default function BattleArena({ forceOffline }) {
                     timer={gameTimer}
                     activePowerup={playerPowerups[multiplayer.playerId]}
                     loadout={playerLoadouts[multiplayer.playerId] || DEFAULT_LOADOUT || ['speed_boost', 'rocket', 'shield']}
+                    cooldowns={powerupCooldowns}
                     damageStats={hudDamage}
                     stocks={hudStocks}
                     knockoutMessage={knockoutMessage}
@@ -981,15 +1049,36 @@ export default function BattleArena({ forceOffline }) {
                 />
             )}
 
+            {/* Match Start Countdown Overlay */}
+            {startCountdown !== null && multiplayer.gameState === 'playing' && (
+                <div className="countdown-overlay">
+                    <h1 className={startCountdown === 'GO!' ? 'go-text' : 'number-text'}>
+                        {startCountdown}
+                    </h1>
+                </div>
+            )}
+
             {/* Replay Killcam */}
             {showReplay && activeReplay && (
                 <ReplayPlayer
-                    replay={activeReplay}
-                    onClose={() => {
-                        setShowReplay(false);
-                        setActiveReplay(null);
-                    }}
+                    replayData={activeReplay}
+                    onClose={() => setShowReplay(false)}
                 />
+            )}
+
+            {showSettings && (
+                <SettingsMenu
+                    videoSettings={videoSettings}
+                    setVideoSettings={setVideoSettings}
+                    onClose={() => setShowSettings(false)}
+                />
+            )}
+
+            {/* Admin/Debug tools */}
+            {isAdmin && (
+                <div style={{ position: 'fixed', bottom: '10px', right: '10px', zIndex: 1000, display: 'flex', gap: '5px' }}>
+                    <button className="btn-small" onClick={() => setShowSettings(true)}>Settings</button>
+                </div>
             )}
 
             <style jsx>{`
@@ -997,6 +1086,49 @@ export default function BattleArena({ forceOffline }) {
                     position: fixed;
                     inset: 0;
                     background: #000;
+                }
+                .countdown-overlay {
+                    position: fixed;
+                    inset: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    background: rgba(0,0,0,0.5);
+                    z-index: 150;
+                    pointer-events: none;
+                }
+                .number-text, .go-text {
+                    font-family: 'Orbitron', sans-serif;
+                    font-weight: 900;
+                    padding: 0;
+                    margin: 0;
+                    text-align: center;
+                }
+                .number-text {
+                    font-size: 15rem;
+                    color: #fff;
+                    text-shadow: 0 0 50px rgba(0,212,255,0.8);
+                    animation: count-pop 1s infinite;
+                }
+                .go-text {
+                    font-size: 20rem;
+                    background: linear-gradient(135deg, #00ff87, #60efff);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    text-shadow: 0 0 80px rgba(0,255,135,0.6);
+                    animation: go-blast 1s ease-out forwards;
+                }
+                @keyframes count-pop {
+                    0% { transform: scale(0.5); opacity: 0; }
+                    20% { transform: scale(1.1); opacity: 1; }
+                    40% { transform: scale(1); opacity: 1; }
+                    80% { transform: scale(1); opacity: 1; }
+                    100% { transform: scale(1.5); opacity: 0; }
+                }
+                @keyframes go-blast {
+                    0% { transform: scale(0.1) rotate(-10deg); opacity: 0; }
+                    30% { transform: scale(1.2) rotate(5deg); opacity: 1; filter: brightness(2); }
+                    100% { transform: scale(3) rotate(0deg); opacity: 0; filter: brightness(1); }
                 }
             `}</style>
         </div>

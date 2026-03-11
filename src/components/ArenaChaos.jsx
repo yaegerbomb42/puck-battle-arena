@@ -7,8 +7,8 @@ import { PHYSICS_CONFIG } from '../utils/physics';
 // Floor Material (Normal friction)
 function Floor() {
     const [ref] = useBox(() => ({
-        position: [0, -0.5, 0],
-        args: [24, 1, 16], // Rectangular arena
+        position: [0, -2.5, 0], // Shifted down for top surface at y=0
+        args: [24, 5, 16], // Thickened to 5 units
         type: 'Static',
         material: { friction: 0.3, restitution: 0.5 },
     }));
