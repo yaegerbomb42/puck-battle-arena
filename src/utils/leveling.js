@@ -56,6 +56,40 @@ export const RANK_NAMES = {
     55: "Commander"
 };
 
+// Rank Tiers (Competitive)
+export const RANK_TIERS = [
+    { id: 'bronze', name: 'Bronze', minRP: 0, color: '#cd7f32' },
+    { id: 'silver', name: 'Silver', minRP: 1000, color: '#c0c0c0' },
+    { id: 'gold', name: 'Gold', minRP: 2500, color: '#ffd700' },
+    { id: 'platinum', name: 'Platinum', minRP: 5000, color: '#e5e4e2' },
+    { id: 'diamond', name: 'Diamond', minRP: 10000, color: '#b9f2ff' },
+    { id: 'divine', name: 'Divine', minRP: 25000, color: '#ff006e' },
+];
+
+export function getRankFromRP(rp) {
+    const totalRP = Math.max(0, rp || 0);
+    // Find highest tier where minRP is met
+    for (let i = RANK_TIERS.length - 1; i >= 0; i--) {
+        if (totalRP >= RANK_TIERS[i].minRP) {
+            return RANK_TIERS[i];
+        }
+    }
+    return RANK_TIERS[0];
+}
+
+export function getRankProgress(rp) {
+    const currentRank = getRankFromRP(rp);
+    const currentIndex = RANK_TIERS.indexOf(currentRank);
+    
+    if (currentIndex === RANK_TIERS.length - 1) return 1.0; // Divine is max
+
+    const nextRank = RANK_TIERS[currentIndex + 1];
+    const rpInTier = (rp || 0) - currentRank.minRP;
+    const rpNeeded = nextRank.minRP - currentRank.minRP;
+
+    return Math.min(1.0, Math.max(0.0, rpInTier / rpNeeded));
+}
+
 export function getRankName(level) {
     // Find highest rank for current level
     const ranks = Object.keys(RANK_NAMES).map(Number).sort((a, b) => b - a);

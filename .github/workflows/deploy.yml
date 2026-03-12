@@ -76,13 +76,19 @@ jobs:
             echo "=== .env written ==="
             echo "FIREBASE_API_KEY starts with: $(echo $REACT_APP_FIREBASE_API_KEY | head -c 8)..."
 
+            echo "=== SYSTEM CHECK ==="
+            df -h /
+            free -m
+
             echo "=== BUILDING CONTAINERS (FRESH) ==="
-            sudo docker compose build --no-cache frontend backend
-            echo "=== STOPPING OLD CONTAINERS ==="
+            # Stop existing to free up RAM before build
             sudo docker stop puckoff-frontend puckoff-backend 2>/dev/null || true
             sudo docker rm -f puckoff-frontend puckoff-backend 2>/dev/null || true
-            # Also remove any orphaned containers with similar names
-            sudo docker rm -f $(sudo docker ps -aq --filter "name=puckoff-") 2>/dev/null || true
+            sudo docker container prune -f
+            
+            # Build with progress and no-cache to ensure freshness
+            sudo docker compose build --no-cache --progress plain frontend backend
+            
             echo "=== STARTING FRESH CONTAINERS ==="
             sudo docker compose up -d --no-deps --force-recreate frontend backend
 

@@ -13,7 +13,8 @@ import { audio } from '../../utils/audio';
 
 import { getBiomeList } from '../../utils/mapGenerator';
 import { GAME_MODES } from '../../utils/gameModes';
-import { getLevelFromXp, getLevelProgress, getRankName } from '../../utils/leveling';
+import { getLevelFromXp, getLevelProgress, getRankName, getRankFromRP, getRankProgress, RANK_TIERS } from '../../utils/leveling';
+import { REGIONS } from '../../utils/config';
 
 export default function Lobby({
     connected,
@@ -32,8 +33,13 @@ export default function Lobby({
     gameMode,
     onSelectMode,
     mapVotes,
-    onTestMaintenance, // [NEW]
-    onShowSettings
+    onTestMaintenance,
+    onShowSettings,
+    matchmakingStatus = 'idle',
+    onStartMatchmaking,
+    onCancelMatchmaking,
+    currentRegion,
+    onSwitchRegion
 }) {
     const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, updateLoadout, setActiveLoadout, updateUsername, loading, joinWagerMatch, isAdmin } = useAuth();
 
@@ -53,6 +59,8 @@ export default function Lobby({
     const [openingPack, setOpeningPack] = useState(null);
     const [playerName, setPlayerName] = useState(user?.displayName || '');
     const [activePlayers, setActivePlayers] = useState(0);
+    const [searchingTime, setSearchingTime] = useState(0);
+    const [showRegionMenu, setShowRegionMenu] = useState(false);
 
     // [NEW] Force Loadout Selection if empty
     React.useEffect(() => {
@@ -99,6 +107,20 @@ export default function Lobby({
             setPlayerName(user.displayName);
         }
     }, [inventory?.username, user]);
+
+    // [NEW] Matchmaking Timer
+    React.useEffect(() => {
+        let interval;
+        if (matchmakingStatus === 'searching') {
+            setSearchingTime(0);
+            interval = setInterval(() => {
+                setSearchingTime(prev => prev + 1);
+            }, 1000);
+        } else {
+            setSearchingTime(0);
+        }
+        return () => clearInterval(interval);
+    }, [matchmakingStatus]);
 
     // [NEW] Auto-close auth modal when signed in
     React.useEffect(() => {
@@ -168,6 +190,24 @@ export default function Lobby({
     return (
         <div className="lobby-overlay">
             {/* Modals */}
+            {/* Matchmaking Overlay */}
+            {matchmakingStatus === 'searching' && (
+                <div className="matchmaking-overlay">
+                    <div className="searching-card glass-dark">
+                        <div className="searching-spinner">
+                            <div className="spinner-orbit"></div>
+                            <div className="spinner-puck"></div>
+                        </div>
+                        <h2>SEARCHING FOR MATCH</h2>
+                        <div className="searching-timer">{Math.floor(searchingTime / 60)}:{(searchingTime % 60).toString().padStart(2, '0')}</div>
+                        <p className="searching-desc">Finding the best arena for you...</p>
+                        <button className="btn btn-secondary cancel-search" onClick={() => { audio.playClick(); onCancelMatchmaking(); }}>
+                            CANCEL
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {openingPack && (
                 <PackOpener
                     packType={openingPack}
@@ -267,6 +307,31 @@ export default function Lobby({
                         <span className="live-dot">●</span>
                         {activePlayers} Online
                     </div>
+
+                    {/* Region Picker */}
+                    <div className="region-selector-container">
+                        <button className="region-btn" onClick={() => setShowRegionMenu(!showRegionMenu)}>
+                            {currentRegion?.name || 'Region'}
+                            <span style={{ marginLeft: '4px', opacity: 0.5, fontSize: '0.8em' }}>▼</span>
+                        </button>
+                        {showRegionMenu && (
+                            <div className="region-dropdown">
+                                {REGIONS.map(r => (
+                                    <div 
+                                        key={r.id} 
+                                        className={`region-item ${currentRegion?.id === r.id ? 'active' : ''}`}
+                                        onClick={() => {
+                                            onSwitchRegion?.(r.id);
+                                            setShowRegionMenu(false);
+                                            audio.playClick();
+                                        }}
+                                    >
+                                        {r.name}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                     <button className="btn-settings" onClick={() => { audio.playClick(); onShowSettings(); }} title="Settings">⚙️</button>
                     {isAdmin && (
                         <button className="btn-admin-hidden" onClick={() => { audio.playClick(); setShowAdmin(true); }} style={{ opacity: 0.2 }}>🛠️</button>
@@ -326,6 +391,23 @@ export default function Lobby({
                                             className="xp-bar-fill"
                                             style={{ width: `${getLevelProgress(inventory?.xp || 0) * 100}%` }}
                                         />
+                                    </div>
+
+                                    {/* Rank Display */}
+                                    <div className="rank-container">
+                                        <div className="rank-badge" style={{ borderColor: getRankFromRP(inventory?.rankPoints || 0).color }}>
+                                            <div className="rank-tier-name">{getRankFromRP(inventory?.rankPoints || 0).name}</div>
+                                            <div className="rp-value">{inventory?.rankPoints || 0} RP</div>
+                                        </div>
+                                        <div className="rp-bar-container">
+                                            <div 
+                                                className="rp-bar-fill" 
+                                                style={{ 
+                                                    width: `${getRankProgress(inventory?.rankPoints || 0) * 100}%`,
+                                                    background: getRankFromRP(inventory?.rankPoints || 0).color 
+                                                }} 
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             ) : (
@@ -392,7 +474,7 @@ export default function Lobby({
                                         const joined = await joinWagerMatch(wagerAmount);
                                         if (!joined) return;
                                     }
-                                    onQuickJoin(playerName, user?.email);
+                                    onStartMatchmaking(playerName, user?.email);
                                 }}
                             >
                                 {isWagerMode ? `⚔️ WAGER ${wagerAmount} Z` : (user ? '⚡ QUICK PLAY' : '🔒 SIGN IN TO PLAY')}
@@ -1067,6 +1149,138 @@ export default function Lobby({
                 }
                 .lobby-footer-links a:hover {
                     color: #00d4ff;
+                }
+
+                /* Matchmaking Overlay */
+                .matchmaking-overlay {
+                    position: fixed; inset: 0;
+                    background: rgba(0,0,0,0.8);
+                    backdrop-filter: blur(10px);
+                    display: flex; align-items: center; justify-content: center;
+                    z-index: 500;
+                }
+                .searching-card {
+                    padding: 3rem; border-radius: 30px; text-align: center;
+                    width: 100%; max-width: 400px;
+                    border: 1px solid rgba(0,212,255,0.3);
+                    box-shadow: 0 0 50px rgba(0,212,255,0.2);
+                    background: rgba(10, 10, 20, 0.9);
+                }
+                .searching-spinner {
+                    position: relative; width: 80px; height: 80px; margin: 0 auto 2rem;
+                }
+                .spinner-orbit {
+                    position: absolute; inset: 0;
+                    border: 3px solid rgba(0,212,255,0.1);
+                    border-top-color: #00d4ff;
+                    border-radius: 50%;
+                    animation: spin 1s linear infinite;
+                }
+                .spinner-puck {
+                    position: absolute; top: 10px; left: 10px; right: 10px; bottom: 10px;
+                    background: #ff006e; border-radius: 50%;
+                    box-shadow: 0 0 15px #ff006e;
+                    animation: breathe 2s ease-in-out infinite;
+                }
+                .searching-timer {
+                    font-size: 2rem; font-weight: 900; color: #00d4ff;
+                    margin: 1rem 0; font-family: 'Orbitron', sans-serif;
+                }
+                .searching-desc { color: #aaa; margin-bottom: 2rem; font-size: 0.9rem; }
+                .cancel-search { width: 100%; border-radius: 30px; }
+
+                @keyframes spin { 100% { transform: rotate(360deg); } }
+                @keyframes breathe { 0%, 100% { transform: scale(0.8); opacity: 0.8; } 50% { transform: scale(1); opacity: 1; } }
+
+                /* Region Selector */
+                .region-selector-container {
+                    position: relative;
+                }
+                .region-btn {
+                    background: rgba(255, 255, 255, 0.05);
+                    backdrop-filter: blur(8px);
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    border-radius: 20px;
+                    padding: 6px 14px;
+                    color: rgba(255, 255, 255, 0.9);
+                    font-size: 0.85rem;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    transition: all 0.2s;
+                    font-family: 'Inter', sans-serif;
+                }
+                .region-btn:hover {
+                    background: rgba(255, 255, 255, 0.15);
+                    border-color: rgba(255, 255, 255, 0.3);
+                }
+                .region-dropdown {
+                    position: absolute;
+                    top: calc(100% + 10px);
+                    right: 0;
+                    background: rgba(15, 15, 25, 0.95);
+                    backdrop-filter: blur(15px);
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    border-radius: 12px;
+                    width: 160px;
+                    overflow: hidden;
+                    z-index: 1000;
+                    box-shadow: 0 15px 35px rgba(0,0,0,0.6);
+                }
+                .region-item {
+                    padding: 12px 18px;
+                    font-size: 0.85rem;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    color: rgba(255,255,255,0.7);
+                    text-align: left;
+                }
+                .region-item:hover {
+                    background: rgba(0, 212, 255, 0.15);
+                    color: #00d4ff;
+                }
+                .region-item.active {
+                    color: #00ff87;
+                    font-weight: bold;
+                    background: rgba(0, 255, 135, 0.05);
+                }
+
+                /* Rank UI */
+                .rank-container {
+                    margin-top: 1rem;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 0.5rem;
+                }
+                .rank-badge {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 8px 12px;
+                    background: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    border-radius: 8px;
+                    font-family: 'Orbitron', sans-serif;
+                }
+                .rank-tier-name {
+                    font-weight: 900;
+                    font-size: 0.8rem;
+                    letter-spacing: 1px;
+                }
+                .rp-value {
+                    font-size: 0.75rem;
+                    opacity: 0.8;
+                }
+                .rp-bar-container {
+                    height: 4px;
+                    background: rgba(255, 255, 255, 0.05);
+                    border-radius: 2px;
+                    overflow: hidden;
+                }
+                .rp-bar-fill {
+                    height: 100%;
+                    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+                    box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
                 }
             `}</style>
         </div>

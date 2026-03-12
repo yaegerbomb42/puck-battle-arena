@@ -297,7 +297,8 @@ export default function Puck({
     onUseItem,
     onUseLoadoutItem,
     onImpact,
-    onInvincibleChange, // NEW PROP
+    onInvincibleChange,
+    onInput,
     isPaused,
     remotePosition,
     remoteVelocity,
@@ -732,6 +733,34 @@ export default function Puck({
                     audio.playJump();
                 }
             }
+
+            // REPORT INPUT TO SERVER (Every frame, simple throttled intent)
+            if (onInput) {
+                onInput({
+                    moveX: forceX,
+                    moveZ: forceZ,
+                    jump: spacePressed,
+                    dash: dashPressed,
+                    timestamp: Date.now()
+                });
+            }
+
+            // RECONCILIATION: Check if local prediction differs from server authority
+            if (remotePosition) {
+                const dist = new THREE.Vector3(...position.current).distanceTo(new THREE.Vector3(...remotePosition));
+                if (dist > 1.5) {
+                    // Critical de-sync: snap
+                    api.position.set(...remotePosition);
+                } else if (dist > 0.1) {
+                    // Minor drift: nudge physics body toward server reality
+                    const error = [
+                        (remotePosition[0] - position.current[0]) * 5,
+                        (remotePosition[1] - position.current[1]) * 5,
+                        (remotePosition[2] - position.current[2]) * 5
+                    ];
+                    api.applyForce(error, [0, 0, 0]);
+                }
+            }
         }
 
         // --- BOT AI LOGIC ---
@@ -784,14 +813,31 @@ export default function Puck({
         lastExplosionTime.current = explosionEvent.timestamp;
     }, [explosionEvent, isLocalPlayer, api, onImpact]);
 
-    // ========== REMOTE PLAYER SYNC ==========
+    // ========== REMOTE PLAYER SYNC (SMOOTH INTERPOLATION) ==========
     useEffect(() => {
         // Skip sync for bots so they can use full physics
         if (!isLocalPlayer && !isBot && remotePosition) {
-            api.position.set(...remotePosition);
+            // Check distance to see if we should snap or slide
+            const dist = new THREE.Vector3(...position.current).distanceTo(new THREE.Vector3(...remotePosition));
+            if (dist > 3) {
+                api.position.set(...remotePosition);
+            } else {
+                // Apply a correcting impulse instead of a hard set for smooth movement
+                const nudge = [
+                    (remotePosition[0] - position.current[0]) * 10,
+                    (remotePosition[1] - position.current[1]) * 10,
+                    (remotePosition[2] - position.current[2]) * 10
+                ];
+                api.applyForce(nudge, [0, 0, 0]);
+            }
         }
         if (!isLocalPlayer && !isBot && remoteVelocity) {
-            api.velocity.set(...remoteVelocity);
+            // Lerp velocity for smoother transitions
+            api.velocity.set(
+                remoteVelocity[0] * 0.8 + velocity.current[0] * 0.2,
+                remoteVelocity[1] * 0.8 + velocity.current[1] * 0.2,
+                remoteVelocity[2] * 0.8 + velocity.current[2] * 0.2
+            );
         }
     }, [api, isLocalPlayer, isBot, remotePosition, remoteVelocity]);
 

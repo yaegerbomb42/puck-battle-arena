@@ -51,6 +51,7 @@ function GameScene({
     onStomp,
     onCollectPowerup,
     onPositionUpdate,
+    onInput,
     onUseItem,
     onUseLoadoutItem,
     effects,
@@ -65,6 +66,7 @@ function GameScene({
     slowmo,
     gameMode,
     onInvincibleChange,
+    isSpectating = false, // Added for spectator support
     explosionEvent,
     projectileImpactEvent,
     videoSettings
@@ -98,10 +100,11 @@ function GameScene({
             {/* Dynamic Camera */}
             <DynamicCamera
                 playerPositions={playerPositions}
-                localPlayerId={localPlayerId}
+                localPlayerId={isSpectating ? null : localPlayerId} // Null ID forces center-view
                 shake={screenShake}
                 knockoutTarget={knockoutTarget}
                 slowmo={slowmo}
+                isSpectating={isSpectating}
             />
 
             {/* Arena */}
@@ -139,6 +142,7 @@ function GameScene({
                         onKnockout={onKnockout}
                         onStomp={onStomp}
                         onPositionUpdate={player.id === localPlayerId ? onPositionUpdate : undefined}
+                        onInput={player.id === localPlayerId ? onInput : undefined}
                         onCollision={player.id === localPlayerId ? onCollision : undefined}
                         onUseItem={player.id === localPlayerId ? onUseItem : undefined}
                         onUseLoadoutItem={player.id === localPlayerId ? onUseLoadoutItem : undefined}
@@ -864,6 +868,11 @@ export default function BattleArena({ forceOffline }) {
                     onCreateRoom={multiplayer.createRoom}
                     onJoinRoom={multiplayer.joinRoom}
                     onQuickJoin={multiplayer.quickJoin}
+                    matchmakingStatus={multiplayer.matchmakingStatus}
+                    onStartMatchmaking={multiplayer.startMatchmaking}
+                    onCancelMatchmaking={multiplayer.cancelMatchmaking}
+                    currentRegion={multiplayer.currentRegion}
+                    onSwitchRegion={multiplayer.switchRegion}
                     onReady={(ready, loadout) => {
                         setPlayerLoadouts(prev => ({ ...prev, [multiplayer.playerId]: loadout }));
                         multiplayer.setReady?.(ready);
@@ -990,7 +999,9 @@ export default function BattleArena({ forceOffline }) {
                                     onStomp={handleStomp}
                                     onCollectPowerup={handleCollectPowerup}
                                     onPositionUpdate={handlePositionUpdate}
+                                    onInput={multiplayer.sendInput}
                                     onCollision={handleCollision}
+                                    isSpectating={multiplayer.isSpectating}
                                     onUseItem={handleUseItem}
                                     onUseLoadoutItem={handleUseLoadoutItem}
                                     effects={effects}
@@ -1047,6 +1058,27 @@ export default function BattleArena({ forceOffline }) {
                     fps={fpsRef.current}
                     invincible={isInvincible}
                 />
+            )}
+
+            {/* Spectator HUD */}
+            {multiplayer.isSpectating && (
+                <div className="spectator-hud">
+                    <div className="spectator-badge">
+                        <div className="pulse-dot"></div>
+                        <span>SPECTATING</span>
+                    </div>
+                    {multiplayer.spectatorCount > 1 && (
+                        <div className="spectator-count">
+                             {multiplayer.spectatorCount} observers
+                        </div>
+                    )}
+                    <button 
+                        className="btn-glass exit-spectator-btn"
+                        onClick={multiplayer.exitSpectator}
+                    >
+                        LEAVE MATCH
+                    </button>
+                </div>
             )}
 
             {/* Match Start Countdown Overlay */}
@@ -1129,6 +1161,66 @@ export default function BattleArena({ forceOffline }) {
                     0% { transform: scale(0.1) rotate(-10deg); opacity: 0; }
                     30% { transform: scale(1.2) rotate(5deg); opacity: 1; filter: brightness(2); }
                     100% { transform: scale(3) rotate(0deg); opacity: 0; filter: brightness(1); }
+                }
+
+                .spectator-hud {
+                    position: fixed;
+                    top: 2rem;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 1rem;
+                    z-index: 200;
+                    pointer-events: none;
+                }
+
+                .spectator-badge {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.8rem;
+                    padding: 0.6rem 1.2rem;
+                    background: rgba(255, 255, 255, 0.1);
+                    backdrop-filter: blur(10px);
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    border-radius: 50px;
+                    color: #fff;
+                    font-family: 'Orbitron', sans-serif;
+                    font-size: 0.9rem;
+                    letter-spacing: 2px;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+                    pointer-events: auto;
+                }
+
+                .pulse-dot {
+                    width: 8px;
+                    height: 8px;
+                    background: #ff006e;
+                    border-radius: 50%;
+                    box-shadow: 0 0 10px #ff006e;
+                    animation: pulse 1.5s infinite;
+                }
+
+                .spectator-count {
+                    font-family: 'Inter', sans-serif;
+                    font-size: 0.8rem;
+                    color: rgba(255, 255, 255, 0.6);
+                    text-transform: uppercase;
+                    letter-spacing: 1px;
+                }
+
+                .exit-spectator-btn {
+                    pointer-events: auto;
+                    font-size: 0.8rem;
+                    padding: 0.5rem 1.5rem;
+                    border-radius: 8px;
+                }
+
+                @keyframes pulse {
+                    0% { transform: scale(1); opacity: 1; }
+                    50% { transform: scale(1.5); opacity: 0.5; }
+                    100% { transform: scale(1); opacity: 1; }
                 }
             `}</style>
         </div>

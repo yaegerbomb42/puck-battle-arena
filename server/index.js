@@ -97,9 +97,20 @@ if (admin.apps.length > 0) {
     db = getFirestore();
     auth = getAuth();
 } else {
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+        console.error('❌ FATAL: FIREBASE_SERVICE_ACCOUNT_BASE64 is missing in production!');
+        process.exit(1);
+    }
     console.warn('⚠️ using MOCK DATABASE (In-Memory) - Payments/Auth will not persist!');
     db = new MockFirestore();
     auth = new MockAuth();
+}
+
+// Ensure Stripe is configured in production
+if (process.env.NODE_ENV === 'production' && (!process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY === 'sk_test_YOUR_KEY')) {
+    console.error('❌ FATAL: STRIPE_SECRET_KEY is missing or default in production!');
+    process.exit(1);
 }
 
 // ============ STRIPE WEBHOOK HANDLER ============
@@ -407,6 +418,8 @@ const io = new Server(server, {
 const rooms = new Map();
 const playerRooms = new Map();
 const playerInventories = new Map();
+const matchmakingQueue = new Map(); // [NEW] { socketId: { playerName, userEmail, skinData, joinedAt } }
+const disconnectedPlayers = new Map(); // [NEW] { playerId: { roomCode, playerData, timeout } }
 
 // Generate random room code
 function generateRoomCode() {
@@ -416,10 +429,20 @@ function generateRoomCode() {
 // Player colors
 const PLAYER_COLORS = ['#00d4ff', '#ff006e', '#00ff87', '#9d4edd'];
 
+// Physics Constants (Matches src/utils/physics.js for consistency)
+const PHYSICS = {
+    gravity: -50,
+    accel: 60,
+    damping: 0.1,
+    jumpForce: 22,
+    dashForce: 65,
+    maxVelocity: 45,
+    tickRate: 22, // 22Hz (approx 45ms per tick)
+};
+
 io.on('connection', (socket) => {
     console.log(`Player connected: ${socket.id} `);
 
-    // 📢 Send Maintenance Warning to new connections if active
     if (activeMaintenance) {
         // Recalculate remaining duration to be accurate
         const elapsedMinutes = (Date.now() - activeMaintenance.startTime) / 1000 / 60;
@@ -434,11 +457,33 @@ io.on('connection', (socket) => {
         }
     }
 
+    // ========== MATCHMAKING EVENTS ==========
+    socket.on('startMatchmaking', ({ playerName, userEmail, skinData }) => {
+        console.log(`🔍 Player joined matchmaking: ${playerName} (${socket.id})`);
+        matchmakingQueue.set(socket.id, {
+            socket,
+            playerName,
+            userEmail,
+            skinData,
+            joinedAt: Date.now()
+        });
+        socket.emit('matchmakingUpdate', { status: 'searching' });
+    });
+
+    socket.on('cancelMatchmaking', () => {
+        if (matchmakingQueue.has(socket.id)) {
+            console.log(`❌ Player left matchmaking: ${socket.id}`);
+            matchmakingQueue.delete(socket.id);
+            socket.emit('matchmakingUpdate', { status: 'idle' });
+        }
+    });
+
     // Create a new room
     socket.on('createRoom', ({ playerName, userEmail, skinData }, callback) => {
         const roomCode = generateRoomCode();
         rooms.set(roomCode, {
             players: new Map(),
+            spectators: new Set(), // Track active spectators
             powerups: [],
             gameState: 'waiting',
             hostId: socket.id,
@@ -448,6 +493,36 @@ io.on('connection', (socket) => {
     });
 
     // Join existing room
+    // ============ SESSION RECOVERY ============
+    socket.on('reconnectPlayer', ({ playerId, roomCode }, callback) => {
+        console.log(`🔄 Reconnect attempt for ${playerId} in room ${roomCode}`);
+        const session = disconnectedPlayers.get(playerId);
+        
+        if (session && session.roomCode === roomCode) {
+            // Cancel the cleanup timeout
+            clearTimeout(session.timeout);
+            disconnectedPlayers.delete(playerId);
+
+            const room = rooms.get(roomCode);
+            if (room) {
+                // Restore player data to the room
+                const playerData = session.playerData;
+                room.players.set(socket.id, playerData);
+                playerRooms.set(socket.id, roomCode);
+                
+                // Update room state
+                io.to(roomCode).emit('playerJoined', { playerId: socket.id, playerName: playerData.name });
+                io.to(roomCode).emit('playerUpdate', getPlayersArray(room));
+                
+                if (callback) callback({ success: true, gameState: room.gameState, selectedMap: room.selectedMap });
+                console.log(`✅ Reconnected ${playerData.name} (${socket.id}) to ${roomCode}`);
+                return;
+            }
+        }
+        
+        if (callback) callback({ success: false, message: 'Session expired or invalid' });
+    });
+
     socket.on('joinRoom', ({ roomCode, playerName, userEmail, skinData }, callback) => {
         const code = roomCode.toUpperCase();
         if (!rooms.has(code)) {
@@ -457,11 +532,26 @@ io.on('connection', (socket) => {
 
         const room = rooms.get(code);
         if (room.players.size >= 4) {
-            callback({ success: false, error: 'Room is full' });
+            // Offer to join as spectator instead of rejecting
+            callback({ 
+                success: false, 
+                error: 'Room is full', 
+                canSpectate: true 
+            });
             return;
         }
 
         joinRoom(socket, code, playerName, userEmail, callback, skinData);
+    });
+
+    // Join as spectator explicitly
+    socket.on('joinAsSpectator', ({ roomCode, playerName, userEmail }, callback) => {
+        const code = roomCode.toUpperCase();
+        if (!rooms.has(code)) {
+            callback({ success: false, error: 'Room not found' });
+            return;
+        }
+        joinRoom(socket, code, playerName, userEmail, callback, {}, true);
     });
 
     // Quick join - find or create room
@@ -481,10 +571,13 @@ io.on('connection', (socket) => {
             roomCode = generateRoomCode();
             rooms.set(roomCode, {
                 players: new Map(),
+                spectators: new Set(),
                 powerups: [],
                 gameState: 'waiting',
                 hostId: socket.id,
                 selectedMap: 'SAWBLADE CITY', // Default map
+                tick: 0,
+                history: new Map(), // tick -> { playerStates: { id: { p, v } } }
             });
         }
 
@@ -542,8 +635,8 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Player position update
-    socket.on('playerPosition', ({ position, velocity, rotation }) => {
+    // Player input update (intent-based movement)
+    socket.on('playerInput', (input) => {
         const roomCode = playerRooms.get(socket.id);
         if (!roomCode) return;
 
@@ -552,43 +645,60 @@ io.on('connection', (socket) => {
 
         const player = room.players.get(socket.id);
         if (player) {
-            player.position = position;
-            player.velocity = velocity;
-            player.rotation = rotation;
-
-            // Broadcast to others in room
-            socket.to(roomCode).emit('playerMoved', {
-                playerId: socket.id,
-                position,
-                velocity,
-                rotation,
-            });
+            player.input = input; // { moveX, moveZ, jump, dash }
+            player.lastActivity = Date.now(); // Reset AFK timer
         }
     });
 
-    // Player damage update
+    // Handle legacy player position (for fallback/transition, mostly ignored now)
+    socket.on('playerPosition', ({ position, velocity, rotation }) => {
+        const roomCode = playerRooms.get(socket.id);
+        if (!roomCode) return;
+        const room = rooms.get(roomCode);
+        if (room && room.gameState === 'playing' && !room.serverAuthoritative) {
+            const player = room.players.get(socket.id);
+            if (player) {
+                player.position = position;
+                player.velocity = velocity;
+                socket.to(roomCode).emit('playerMoved', { playerId: socket.id, position, velocity });
+            }
+        }
+    });
+
+    // Player damage update (hazards / self-reported)
     socket.on('playerDamage', ({ damage }) => {
         const roomCode = playerRooms.get(socket.id);
         if (!roomCode) return;
-
         const room = rooms.get(roomCode);
         if (!room) return;
-
         const player = room.players.get(socket.id);
         if (player) {
             player.damage = damage;
-            // Broadcast update
             io.to(roomCode).emit('damageUpdate', { playerId: socket.id, damage });
         }
     });
 
     // Player knockout
-    socket.on('playerKnockout', ({ knockedOutId }) => {
+    socket.on('playerKnockout', ({ knockedOutId, tick }) => {
         const roomCode = playerRooms.get(socket.id);
         if (!roomCode) return;
 
         const room = rooms.get(roomCode);
         if (!room) return;
+
+        // Validation: Ensure victim was actually near a hazard or the attacker
+        const history = room.history.get(tick || room.tick);
+        if (history) {
+            const victimState = history[knockedOutId];
+            if (victimState) {
+                // Check if near boundaries (Arena size usually 15-20 units)
+                const distFromCenter = Math.sqrt(victimState.p[0]**2 + victimState.p[2]**2);
+                if (distFromCenter < 8 && !tick) {
+                    console.warn(`🛡️ Suspicious Knockout: ${knockedOutId} reported far from edge.`);
+                    // We allow it but log it
+                }
+            }
+        }
 
         // Increment scorer's score
         const scorer = room.players.get(socket.id);
@@ -610,8 +720,43 @@ io.on('connection', (socket) => {
             });
             room.gameState = 'ended';
 
-            // Award packs/credits to all players
             awardGameRewards(room, socket.id);
+        }
+    });
+
+    // Server-Side Hit Validation (Lag Compensation)
+    socket.on('reportStomp', ({ targetId, damage, tick }) => {
+        const roomCode = playerRooms.get(socket.id);
+        if (!roomCode) return;
+        const room = rooms.get(roomCode);
+        if (!room || room.gameState !== 'playing') return;
+
+        const history = room.history.get(tick);
+        if (!history) {
+            console.warn(`⚠️ Validation failed: Tick ${tick} too old or missing`);
+            return;
+        }
+
+        const attackerState = history[socket.id];
+        const victimState = history[targetId];
+
+        if (attackerState && victimState) {
+            const dist = Math.sqrt(
+                (attackerState.p[0] - victimState.p[0]) ** 2 +
+                (attackerState.p[1] - victimState.p[1]) ** 2 +
+                (attackerState.p[2] - victimState.p[2]) ** 2
+            );
+
+            if (dist < 3.0) { // Slightly more generous threshold for high stakes
+                const victim = room.players.get(targetId);
+                if (victim) {
+                    victim.damage = (victim.damage || 0) + (damage || 5);
+                    io.to(roomCode).emit('stomp', { attackerId: socket.id, targetId, damage: damage || 5 });
+                    io.to(roomCode).emit('damageUpdate', { playerId: targetId, damage: victim.damage });
+                }
+            } else {
+                console.warn(`🛡️ Rejected Stomp: Dist ${dist.toFixed(2)} > 3.0 at tick ${tick}`);
+            }
         }
     });
 
@@ -673,12 +818,46 @@ io.on('connection', (socket) => {
         if (roomCode) {
             const room = rooms.get(roomCode);
             if (room) {
-                room.players.delete(socket.id);
-                io.to(roomCode).emit('playerLeft', { playerId: socket.id });
-                io.to(roomCode).emit('playerUpdate', getPlayersArray(room));
+                if (room.players.has(socket.id)) {
+                    const playerData = room.players.get(socket.id);
+                    // Store for reconnection
+                    const timeout = setTimeout(() => {
+                        const r = rooms.get(roomCode);
+                        if (r) {
+                            // Replace with BOT if permanent disconnect
+                            const slotIndex = Array.from(r.players.keys()).indexOf(socket.id);
+                            r.players.delete(socket.id);
+                            playerRooms.delete(socket.id);
+                            
+                            spawnBot(roomCode, slotIndex >= 0 ? slotIndex : 0);
+
+                            io.to(roomCode).emit('playerLeft', { playerId: socket.id });
+                            io.to(roomCode).emit('playerUpdate', getPlayersArray(r));
+                            
+                            if (r.players.size === 0 && r.spectators.size === 0) {
+                                rooms.delete(roomCode);
+                            }
+                        }
+                        disconnectedPlayers.delete(socket.id);
+                    }, 60000); // 1 minute window
+
+                    disconnectedPlayers.set(socket.id, {
+                        roomCode,
+                        playerData,
+                        timeout
+                    });
+                    
+                    // We don't remove them yet, just notify others they are "offline" or similar
+                    // For now, let's keep it simple: they stay in the list but won't send inputs.
+                    io.to(roomCode).emit('playerDisconnected', { playerId: socket.id });
+                } else if (room.spectators.has(socket.id)) {
+                    room.spectators.delete(socket.id);
+                    io.to(roomCode).emit('spectatorUpdate', { count: room.spectators.size });
+                }
 
                 // Clean up empty rooms
-                if (room.players.size === 0) {
+                if (room.players.size === 0 && room.spectators.size === 0) {
+                    if (room.loopInterval) clearInterval(room.loopInterval);
                     rooms.delete(roomCode);
                 }
             }
@@ -687,8 +866,27 @@ io.on('connection', (socket) => {
     });
 
     // Helper: Join room
-    function joinRoom(socket, roomCode, playerName, userEmail, callback, skinData = {}) {
+    function joinRoom(socket, roomCode, playerName, userEmail, callback, skinData = {}, isSpectator = false) {
         const room = rooms.get(roomCode);
+        
+        if (isSpectator) {
+            room.spectators.add(socket.id);
+            playerRooms.set(socket.id, roomCode);
+            socket.join(roomCode);
+            
+            callback({
+                success: true,
+                roomCode,
+                playerId: socket.id,
+                isSpectator: true,
+                players: getPlayersArray(room),
+                gameState: room.gameState
+            });
+
+            io.to(roomCode).emit('spectatorUpdate', { count: room.spectators.size });
+            return;
+        }
+
         const playerIndex = room.players.size;
 
         const player = {
@@ -702,6 +900,8 @@ io.on('connection', (socket) => {
             velocity: [0, 0, 0],
             ready: false,
             score: 0,
+            lastActivity: Date.now(),
+            afkWarned: false,
         };
 
         room.players.set(socket.id, player);
@@ -722,6 +922,38 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('playerUpdate', getPlayersArray(room));
     }
 
+    // Helper: Spawn a bot
+    function spawnBot(roomCode, slotIndex) {
+        const room = rooms.get(roomCode);
+        if (!room) return;
+
+        const botId = `bot_${Math.random().toString(36).substring(2, 7)}`;
+        const botNames = ['Puckinator', 'Slapshot_AI', 'Glidder', 'Orbit_Bot', 'Smasher', 'Drift_King'];
+        const name = botNames[Math.floor(Math.random() * botNames.length)];
+        
+        const bot = {
+            id: botId,
+            name: `${name} [BOT]`,
+            email: null,
+            isBot: true,
+            color: PLAYER_COLORS[slotIndex % PLAYER_COLORS.length],
+            skinId: null,
+            skinTier: 0,
+            position: getSpawnPosition(slotIndex),
+            velocity: [0, 0, 0],
+            ready: true,
+            score: 0,
+            lastActivity: Date.now(),
+            afkWarned: false,
+            input: { moveX: 0, moveZ: 0, jump: false, dash: false }
+        };
+
+        room.players.set(botId, bot);
+        io.to(roomCode).emit('playerUpdate', getPlayersArray(room));
+        console.log(`🤖 Bot ${name} joined room ${roomCode}`);
+        return botId;
+    }
+
     // Helper: Get spawn positions (around the arena)
     function getSpawnPosition(index) {
         const positions = [
@@ -740,11 +972,17 @@ io.on('connection', (socket) => {
 
         room.gameState = 'playing';
 
-        // Reset positions
+        // Reset positions and fill with bots if needed
         let i = 0;
         for (const [, player] of room.players) {
             player.position = getSpawnPosition(i);
             player.score = 0;
+            i++;
+        }
+
+        // BACKFILL BOTS if less than 4 players
+        while (room.players.size < 4) {
+            spawnBot(roomCode, i);
             i++;
         }
 
@@ -754,8 +992,215 @@ io.on('connection', (socket) => {
             seed: room.currentSeed || Math.floor(Math.random() * 1000000)
         });
 
+        // Start server-side movement loop (22Hz)
+        room.serverAuthoritative = true;
+        startRoomLoop(roomCode);
+
         // Start powerup spawning
         spawnPowerups(roomCode);
+    }
+
+    // Helper: Start room physics loop
+    function startRoomLoop(roomCode) {
+        const room = rooms.get(roomCode);
+        if (room.loopInterval) clearInterval(room.loopInterval);
+
+        const dt = 1 / PHYSICS.tickRate;
+
+        room.loopInterval = setInterval(() => {
+            if (!room || room.gameState !== 'playing') {
+                clearInterval(room.loopInterval);
+                return;
+            }
+
+            const stateUpdate = {};
+            room.tick++;
+            const currentTickStates = {};
+
+            room.players.forEach((player, id) => {
+                const now = Date.now();
+                let input = player.input || { moveX: 0, moveZ: 0, jump: false, dash: false };
+                
+                // --- BOT AI LOGIC ---
+                if (player.isBot) {
+                    // Find nearest non-bot target
+                    let target = null;
+                    let minDist = Infinity;
+                    room.players.forEach((p, pId) => {
+                        if (pId !== id && !p.isBot) {
+                            const d = Math.sqrt((p.position[0] - player.position[0])**2 + (p.position[2] - player.position[2])**2);
+                            if (d < minDist) {
+                                minDist = d;
+                                target = p;
+                            }
+                        }
+                    });
+
+                    if (target) {
+                        // Move towards target
+                        const dx = target.position[0] - player.position[0];
+                        const dz = target.position[2] - player.position[2];
+                        const mag = Math.sqrt(dx*dx + dz*dz) || 1;
+                        
+                        input.moveX = dx / mag;
+                        input.moveZ = dz / mag;
+
+                        // Combat: Stomp if above target
+                        if (player.position[1] > target.position[1] + 0.5 && minDist < 2.0) {
+                            input.jump = true;
+                        } else {
+                            input.jump = false;
+                        }
+
+                        // Defense: Random dash if far or high damage (simulated)
+                        if (minDist > 10 && Math.random() < 0.01) {
+                            input.dash = true;
+                        } else {
+                            input.dash = false;
+                        }
+                    } else {
+                        // Idle behavior
+                        input.moveX = 0;
+                        input.moveZ = 0;
+                        input.jump = false;
+                        input.dash = false;
+                    }
+                }
+                
+                // Simple Euler Integration
+                // Acceleration
+                player.velocity[0] += input.moveX * PHYSICS.accel * dt;
+                player.velocity[2] += input.moveZ * PHYSICS.accel * dt;
+
+                // Damping
+                player.velocity[0] *= (1 - PHYSICS.damping);
+                player.velocity[2] *= (1 - PHYSICS.damping);
+
+                // Speed Cap
+                const speed = Math.sqrt(player.velocity[0] ** 2 + player.velocity[2] ** 2);
+                if (speed > PHYSICS.maxVelocity) {
+                    player.velocity[0] = (player.velocity[0] / speed) * PHYSICS.maxVelocity;
+                    player.velocity[2] = (player.velocity[2] / speed) * PHYSICS.maxVelocity;
+                }
+
+                // Apply velocity to position
+                player.position[0] += player.velocity[0] * dt;
+                player.position[1] += player.velocity[1] * dt;
+                player.position[2] += player.velocity[2] * dt;
+
+                // Gravity (simple Y check)
+                if (player.position[1] > 1.1) {
+                    player.velocity[1] += PHYSICS.gravity * dt;
+                } else {
+                    player.position[1] = 1;
+                    player.velocity[1] = 0;
+                    if (input.jump) {
+                        player.velocity[1] = PHYSICS.jumpForce;
+                    }
+                }
+
+                // Dash Impulse
+                if (input.dash && (now - (player.lastDashTime || 0) > 2500)) {
+                    let dashX = input.moveX;
+                    let dashZ = input.moveZ;
+                    if (dashX === 0 && dashZ === 0) dashZ = -1; // Default forward
+
+                    const mag = Math.sqrt(dashX * dashX + dashZ * dashZ) || 1;
+                    player.velocity[0] += (dashX / mag) * PHYSICS.dashForce;
+                    player.velocity[2] += (dashZ / mag) * PHYSICS.dashForce;
+                    player.lastDashTime = now;
+                }
+
+                // AFK Detection Check
+                const idleTime = now - (player.lastActivity || now);
+                if (idleTime > 60000) { // 60s Kick
+                    console.log(`👢 AFK Kick: ${id} (Room: ${roomCode})`);
+                    io.to(id).emit('afkKick', { reason: 'Inactivity' });
+                    // Remove player logic
+                    // Replace with BOT to keep game full
+                    const slotIndex = Array.from(room.players.keys()).indexOf(id);
+                    room.players.delete(id);
+                    playerRooms.delete(id);
+                    
+                    spawnBot(roomCode, slotIndex >= 0 ? slotIndex : 0);
+                    
+                    io.to(roomCode).emit('playerLeft', id);
+                    io.to(roomCode).emit('playerUpdate', getPlayersArray(room));
+                    return; // Skip state update for this player
+                } else if (idleTime > 45000 && !player.afkWarned) { // 45s Warning
+                    player.afkWarned = true;
+                    io.to(id).emit('afkWarning', { timeLeft: 15 });
+                    console.log(`⚠️ AFK Warning: ${id}`);
+                } else if (idleTime < 45000) {
+                    player.afkWarned = false; // Reset if they moved
+                }
+
+                stateUpdate[id] = {
+                    p: player.position,
+                    v: player.velocity,
+                    i: id
+                };
+
+                currentTickStates[id] = {
+                    p: [...player.position],
+                    v: [...player.velocity]
+                };
+
+                // --- NEW: BOT HIT DETECTION & COLLECTION ---
+                if (player.isBot) {
+                    // 1. Bot Stomp Detection (Against Humans)
+                    room.players.forEach((target, targetId) => {
+                        if (targetId !== id && !target.isBot) {
+                            const dx = target.position[0] - player.position[0];
+                            const dy = target.position[1] - player.position[1];
+                            const dz = target.position[2] - player.position[2];
+                            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                            // If bot is above and close
+                            if (dy < -0.5 && dist < 1.5) {
+                                target.damage = (target.damage || 0) + 10;
+                                io.to(roomCode).emit('stomp', { attackerId: id, targetId, damage: 10 });
+                                io.to(roomCode).emit('damageUpdate', { playerId: targetId, damage: target.damage });
+                                // Small bounce for bot
+                                player.velocity[1] = 5; 
+                            }
+                        }
+                    });
+
+                    // 2. Bot Powerup Collection
+                    if (room.powerups && room.powerups.length > 0) {
+                        for (let pIdx = room.powerups.length - 1; pIdx >= 0; pIdx--) {
+                            const pu = room.powerups[pIdx];
+                            const dist = Math.sqrt(
+                                (pu.p[0] - player.position[0])**2 + 
+                                (pu.p[1] - player.position[1])**2 + 
+                                (pu.p[2] - player.position[2])**2
+                            );
+                            if (dist < 2.0) {
+                                console.log(`🤖 Bot ${player.name} collected powerup ${pu.type}`);
+                                room.powerups.splice(pIdx, 1);
+                                io.to(roomCode).emit('powerupCollected', { powerupId: pu.id, playerId: id });
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Store in history
+            room.history.set(room.tick, currentTickStates);
+            
+            // Limit history to 60 ticks (~2.7 seconds at 22Hz)
+            if (room.history.size > 60) {
+                const oldestTick = room.tick - 60;
+                room.history.delete(oldestTick);
+            }
+
+            // Broadcast compressed state update with tick
+            io.to(roomCode).emit('roomState', {
+                s: stateUpdate,
+                t: room.tick
+            });
+        }, 1000 / PHYSICS.tickRate);
     }
 
     // Helper: Spawn powerups periodically
@@ -810,15 +1255,15 @@ io.on('connection', (socket) => {
             try {
                 // Determine reward (Zoins)
                 const isWinner = playerId === winnerId;
-                // Base reward for match completion
-                let zoinReward = 10;
+                // [TIE INTO ECONOMY.JS]
+                let zoinReward = 10; // MATCH_COMPLETE
 
                 // Win Bonus
-                if (isWinner) zoinReward += 50;
+                if (isWinner) zoinReward += 50; // WIN
 
                 // Kill Bonus (using score as proxy for kills)
                 const kills = player.score || 0;
-                zoinReward += (kills * 5);
+                zoinReward += (kills * 10); // KILL
 
                 // Get user doc
                 const userQuery = await admin.auth().getUserByEmail(player.email).catch(() => null);
@@ -833,16 +1278,26 @@ io.on('connection', (socket) => {
                     const data = doc.data();
                     const currentZoins = (data.zoins || 0) + zoinReward;
 
+                    // Calculate Rank Points (RP)
+                    // Win: +50, Kill: +5, Loss: -20 (minimum 0 total RP)
+                    const rpGain = isWinner ? 50 : -20;
+                    const killRP = (player.score || 0) * 5;
+                    const totalRPChange = rpGain + killRP;
+                    const newRankPoints = Math.max(0, (data.rankPoints || 0) + totalRPChange);
+
                     t.update(userRef, {
-                        zoins: currentZoins
+                        zoins: currentZoins,
+                        rankPoints: newRankPoints
                     });
 
-                    console.log(`🎁 ${player.email}: Earned ${zoinReward} Zoins.`);
+                    console.log(`🎁 ${player.email}: Earned ${zoinReward} Zoins, RP: ${totalRPChange > 0 ? '+' : ''}${totalRPChange}`);
 
                     // Notify client of reward
                     io.to(playerId).emit('rewardEarned', {
                         zoins: zoinReward,
-                        isWinner
+                        isWinner,
+                        rpChange: totalRPChange,
+                        totalRP: newRankPoints
                     });
                 });
 
@@ -857,6 +1312,64 @@ io.on('connection', (socket) => {
 app.get('/', (req, res) => {
     res.json({ status: 'ok', rooms: rooms.size });
 });
+
+// ============ MATCHMAKING TICK ============
+// Runs every 2.5 seconds to group players
+setInterval(() => {
+    if (matchmakingQueue.size === 0) return;
+
+    const players = Array.from(matchmakingQueue.values());
+    const now = Date.now();
+    
+    // Group players into rooms of 4
+    while (players.length >= 4) {
+        const group = players.splice(0, 4);
+        createMatch(group);
+    }
+
+    // For remaining players, check if they've been waiting too long (> 10s)
+    if (players.length > 0) {
+        const oldestEntry = players.sort((a, b) => a.joinedAt - b.joinedAt)[0];
+        if (now - oldestEntry.joinedAt > 10000) {
+            // Force start a match with 1-3 players (bots will be added in room logic)
+            const group = players.splice(0, players.length);
+            createMatch(group);
+        }
+    }
+}, 2500);
+
+function createMatch(playerEntries) {
+    const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    console.log(`🎮 Matchmaking: Creating room ${roomCode} for ${playerEntries.length} players`);
+    
+    // Use the existing rooms Map and logic
+    const room = {
+        code: roomCode,
+        players: new Set(),
+        gameState: 'lobby',
+        scores: {},
+        startTime: null,
+        lastTick: Date.now(),
+        tickInterval: null,
+        selectedMap: 'PROCEDURAL',
+        selectedMode: 'knockout',
+        seed: Math.floor(Math.random() * 1000000),
+        mapVotes: {},
+        spectators: new Set()
+    };
+    
+    rooms.set(roomCode, room);
+
+    playerEntries.forEach((entry, index) => {
+        const { socket } = entry;
+        
+        // Remove from queue
+        matchmakingQueue.delete(socket.id);
+        
+        // Tell client to join this room
+        socket.emit('matchFound', { roomCode });
+    });
+}
 
 const PORT = process.env.SERVER_PORT || process.env.PORT || 3002;
 server.listen(PORT, () => {

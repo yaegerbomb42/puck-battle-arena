@@ -18,9 +18,11 @@ export function useMultiplayer() {
     const [winner, setWinner] = useState(null);
     const [selectedMap, setSelectedMap] = useState('PROCEDURAL');
     const [selectedMode, setSelectedMode] = useState('knockout');
+    const [currentRegion, setCurrentRegion] = useState(CONFIG.REGIONS[0]);
     const [seed, setSeed] = useState(null);
     const [mapVotes, setMapVotes] = useState({});
     const [timer, setTimer] = useState(null); // Server authoritative timer
+    const [lastServerTick, setLastServerTick] = useState(0);
 
     // Offline / Error State (Missing in previous version)
     const [isOffline, setIsOffline] = useState(false);
@@ -36,14 +38,17 @@ export function useMultiplayer() {
 
     // Spectator Mode
     const [isSpectating, setIsSpectating] = useState(false);
-    const [spectatorRoomId, setSpectatorRoomId] = useState(null);
+    const [spectatorCount, setSpectatorCount] = useState(0);
 
+    // Matchmaking State
+    const [matchmakingStatus, setMatchmakingStatus] = useState('idle'); // idle, searching
+    
     // Event handlers ref
     const handlersRef = useRef({});
 
     const enableOfflineMode = useCallback(() => {
         setIsOffline(true);
-        setConnected(true); // Fake connection
+        setConnected(true);
         setGameState('lobby');
         setPlayerId('offline_p1');
         setPlayerColor('#00d4ff');
@@ -96,11 +101,13 @@ export function useMultiplayer() {
         setSeed(null);
         setIsOffline(false); // Reset offline mode
         localStorage.removeItem(CONFIG.STORAGE_KEYS.ROOM_CODE);
+        localStorage.removeItem(CONFIG.STORAGE_KEYS.PLAYER_ID);
     }, [socket]);
 
     // Connect to server
     useEffect(() => {
-        const newSocket = io(CONFIG.SERVER_URL, {
+        console.log(`🌐 Connecting to ${currentRegion.name} at ${currentRegion.url}...`);
+        const newSocket = io(currentRegion.url, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionAttempts: CONFIG.CONNECTION.RECONNECTION_ATTEMPTS,
@@ -145,6 +152,33 @@ export function useMultiplayer() {
                     }
                 });
             }
+        });
+
+        newSocket.on('reconnectSuccess', ({ gameState, players, roomCode, playerId }) => {
+            console.log('🔄 Reconnected successfully to', roomCode);
+            setRoomCode(roomCode);
+            setPlayerId(playerId);
+            setGameState(gameState);
+            setPlayers(players);
+            localStorage.setItem(CONFIG.STORAGE_KEYS.ROOM_CODE, roomCode);
+            localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_ID, playerId);
+        });
+
+        newSocket.on('afkWarning', (data) => {
+            console.warn(`⚠️ AFK Warning: You will be kicked in ${data.timeLeft} seconds if you don't move!`);
+            setServerMessage(`⚠️ AFK Warning: Move to stay in game! (${data.timeLeft}s)`);
+            setTimeout(() => setServerMessage(null), 5000);
+        });
+
+        newSocket.on('afkKick', (data) => {
+            console.error('👢 Kicked for inactivity');
+            alert('You have been kicked for inactivity.');
+            leaveRoom();
+        });
+
+        newSocket.on('playerDisconnected', ({ playerId }) => {
+            console.log(`⚠️ Player ${playerId} disconnected (waiting for recovery...)`);
+            // Visually mark player as disconnected if needed
         });
 
         newSocket.on('connect_error', (err) => {
@@ -244,6 +278,75 @@ export function useMultiplayer() {
             setTimer(timeRemaining);
         });
 
+        newSocket.on('spectatorUpdate', ({ count }) => {
+            setSpectatorCount(count);
+        });
+
+        newSocket.on('matchmakingUpdate', ({ status }) => {
+            setMatchmakingStatus(status);
+        });
+
+        newSocket.on('matchFound', ({ roomCode }) => {
+            console.log('⚡ Match found! Joining room:', roomCode);
+            setMatchmakingStatus('idle');
+            // We use the roomCode to join manually via the existing joinRoom logic
+            // but we need a way to pass the name/email correctly.
+            // Since joinRoom is a callback, we'll store name/email in a ref or just use storage.
+            const savedName = localStorage.getItem(CONFIG.STORAGE_KEYS.PLAYER_NAME);
+            localStorage.getItem('user_email'); // ensure it's accessed if needed or just remove
+            
+            // Trigger the join
+            newSocket.emit('joinRoom', {
+                roomCode,
+                playerName: savedName || 'Player',
+                skinData: {
+                    skinId: localStorage.getItem('equipped_skin'),
+                    skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                    color: localStorage.getItem('player_color') || '#00d4ff'
+                }
+            }, (response) => {
+                if (response.success) {
+                    setRoomCode(response.roomCode);
+                    setPlayerId(response.playerId);
+                    setGameState('lobby');
+                    setPlayers(response.players);
+                    localStorage.setItem('puck_room_code', response.roomCode);
+                    localStorage.setItem('puck_player_id', response.playerId);
+                }
+            });
+        });
+
+        // AUTO-RECONNECT LOGIC
+        const lastRoom = localStorage.getItem(CONFIG.STORAGE_KEYS.ROOM_CODE);
+        const lastPlayer = localStorage.getItem(CONFIG.STORAGE_KEYS.PLAYER_ID);
+        if (lastRoom && lastPlayer) {
+            console.log('🔄 Attempting auto-reconnect...');
+            newSocket.emit('reconnectPlayer', { playerId: lastPlayer, roomCode: lastRoom }, (response) => {
+                if (!response.success) {
+                    localStorage.removeItem(CONFIG.STORAGE_KEYS.ROOM_CODE);
+                    localStorage.removeItem(CONFIG.STORAGE_KEYS.PLAYER_ID);
+                }
+            });
+        }
+
+        newSocket.on('roomState', (data) => {
+            const { s: playersData, t: serverTick } = data;
+            setLastServerTick(serverTick);
+            
+            setPlayers(prev => prev.map(p => {
+                if (playersData[p.id]) {
+                    return {
+                        ...p,
+                        position: playersData[p.id].p,
+                        velocity: playersData[p.id].v,
+                        // Update in-place for fast access by components
+                        lastServerUpdate: Date.now()
+                    };
+                }
+                return p;
+            }));
+        });
+
         // Maintenance / Server Messages
         newSocket.on('server_message', (msg) => {
             console.log('📢 Server Message:', msg);
@@ -260,9 +363,10 @@ export function useMultiplayer() {
         });
 
         return () => {
+            console.log(`🔌 Disconnecting from ${currentRegion.name}...`);
             newSocket.disconnect();
         };
-    }, []);
+    }, [currentRegion.url, currentRegion.name, lastServerTick, leaveRoom]);
 
     // ========== ROOM ACTIONS ==========
 
@@ -335,9 +439,20 @@ export function useMultiplayer() {
                     localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_ID, response.playerId);
                     localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_NAME, playerName);
 
+                    if (response.isSpectator) {
+                        setIsSpectating(true);
+                        setGameState(response.gameState || 'playing');
+                    } else {
+                        setIsSpectating(false);
+                        setGameState('lobby');
+                    }
+                    setPlayers(response.players);
                     resolve(response);
                 } else {
-                    reject(response.error || 'Room not found');
+                    reject({ 
+                        message: response.error || 'Room not found',
+                        canSpectate: response.canSpectate 
+                    });
                 }
             });
         });
@@ -367,7 +482,15 @@ export function useMultiplayer() {
                     setPlayerColor(response.color);
                     setPlayerIndex(response.playerIndex);
                     setPlayers(response.players);
-                    setGameState('lobby');
+                    
+                    if (response.isSpectator) {
+                        setIsSpectating(true);
+                        setGameState(response.gameState || 'playing');
+                    } else {
+                        setIsSpectating(false);
+                        setGameState('lobby');
+                    }
+                    
                     resolve(response);
                 } else {
                     reject(response.error || 'Matchmaking failed');
@@ -420,6 +543,30 @@ export function useMultiplayer() {
         socket.emit('voteMap', { mapName });
     }, [socket, isOffline, playerId]);
 
+    // ========== MATCHMAKING ACTIONS ==========
+    const startMatchmaking = useCallback((playerName, userEmail) => {
+        if (!socket) return;
+        
+        const skinData = {
+            skinId: localStorage.getItem('equipped_skin'),
+            skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+            color: playerColor
+        };
+
+        // Store email temporarily for matchFound recovery if needed
+        if (userEmail) localStorage.setItem('user_email', userEmail);
+        localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_NAME, playerName);
+
+        socket.emit('startMatchmaking', { playerName, userEmail, skinData });
+        setMatchmakingStatus('searching');
+    }, [socket, playerColor]);
+
+    const cancelMatchmaking = useCallback(() => {
+        if (!socket) return;
+        socket.emit('cancelMatchmaking');
+        setMatchmakingStatus('idle');
+    }, [socket]);
+
     const selectMode = useCallback((mode) => {
         // Optimistic update always
         setSelectedMode(mode);
@@ -428,20 +575,29 @@ export function useMultiplayer() {
     }, [socket, isOffline]);
 
     // ========== SPECTATOR MODE ==========
-    const joinAsSpectator = useCallback((roomId) => {
-        if (!socket) return;
-        setSpectatorRoomId(roomId);
-        setIsSpectating(true);
-        socket.emit('joinSpectator', { roomId });
+    const joinAsSpectator = useCallback((roomCode, playerName, userEmail) => {
+        if (!socket) return Promise.reject('Not connected');
+        
+        return new Promise((resolve, reject) => {
+            socket.emit('joinAsSpectator', { roomCode, playerName, userEmail }, (response) => {
+                if (response.success) {
+                    setRoomCode(response.roomCode);
+                    setPlayerId(response.playerId);
+                    setIsSpectating(true);
+                    setPlayers(response.players);
+                    setGameState(response.gameState || 'playing');
+                    resolve(response);
+                } else {
+                    reject(response.error || 'Failed to join as spectator');
+                }
+            });
+        });
     }, [socket]);
 
     const exitSpectator = useCallback(() => {
-        if (socket) {
-            socket.emit('leaveSpectator');
-        }
         setIsSpectating(false);
-        setSpectatorRoomId(null);
-    }, [socket]);
+        leaveRoom();
+    }, [leaveRoom]);
 
     // ========== GAME SETUP ACTIONS ==========
 
@@ -450,19 +606,24 @@ export function useMultiplayer() {
     // ========== GAMEPLAY ACTIONS ==========
 
     const sendPosition = useCallback((position, velocity, rotation) => {
-        if (!socket || gameState !== 'playing') return;
+        if (!socket || gameState !== 'playing' || isOffline) return;
         socket.emit('playerPosition', { position, velocity, rotation });
-    }, [socket, gameState]);
+    }, [socket, gameState, isOffline]);
+
+    const sendInput = useCallback((input) => {
+        if (!socket || gameState !== 'playing' || isOffline) return;
+        socket.emit('playerInput', input);
+    }, [socket, gameState, isOffline]);
 
     const reportKnockout = useCallback((knockedOutId) => {
         if (!socket) return;
-        socket.emit('playerKnockout', { knockedOutId });
-    }, [socket]);
+        socket.emit('playerKnockout', { knockedOutId, tick: lastServerTick });
+    }, [socket, lastServerTick]);
 
     const reportStomp = useCallback((targetId, damage) => {
         if (!socket) return;
-        socket.emit('reportStomp', { targetId, damage });
-    }, [socket]);
+        socket.emit('reportStomp', { targetId, damage, tick: lastServerTick });
+    }, [socket, lastServerTick]);
 
     const reportDamage = useCallback((damage) => {
         if (!socket) return;
@@ -541,6 +702,13 @@ export function useMultiplayer() {
 
     // ========== HANDLER REGISTRATION ==========
 
+    const switchRegion = useCallback((regionId) => {
+        const region = CONFIG.REGIONS.find(r => r.id === regionId);
+        if (region && region.id !== currentRegion.id) {
+            setCurrentRegion(region);
+        }
+    }, [currentRegion.id]);
+
     const registerHandlers = useCallback((handlers) => {
         handlersRef.current = handlers;
     }, []);
@@ -573,13 +741,20 @@ export function useMultiplayer() {
         serverMessage,
         triggerTestMaintenance,
 
+        // Matchmaking
+        matchmakingStatus,
+        startMatchmaking,
+        cancelMatchmaking,
+
         // Spectator Mode
         isSpectating,
-        spectatorRoomId,
+        spectatorCount,
         joinAsSpectator,
         exitSpectator,
 
         // Room actions
+        currentRegion,
+        switchRegion,
         createRoom,
         joinRoom,
         quickJoin,
@@ -592,6 +767,7 @@ export function useMultiplayer() {
 
         // Gameplay actions
         sendPosition,
+        sendInput,
         reportKnockout,
         reportStomp,
         reportDamage,
@@ -606,9 +782,11 @@ export function useMultiplayer() {
         connected, socket, roomCode, playerId, playerColor, playerIndex, players,
         gameState, scores, serverPowerups, winner, selectedMap, selectedMode,
         seed, mapVotes, timer, connectionError, isOffline, enableOfflineMode,
-        serverMessage, triggerTestMaintenance, isSpectating, spectatorRoomId,
+        serverMessage, triggerTestMaintenance, isSpectating, spectatorCount,
+        matchmakingStatus, startMatchmaking, cancelMatchmaking,
+        currentRegion, switchRegion,
         joinAsSpectator, exitSpectator, createRoom, joinRoom, quickJoin,
-        setReady, leaveRoom, voteMap, selectMode, sendPosition,
+        setReady, leaveRoom, voteMap, selectMode, sendPosition, sendInput,
         reportKnockout, reportStomp, reportDamage, collectPowerup,
         usePowerup, reportGameEnd, requestRematch, registerHandlers
     ]);

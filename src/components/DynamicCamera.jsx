@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -11,60 +11,20 @@ import * as THREE from 'three';
  * - Screen shake with intensity scaling
  */
 
-// Camera mode configurations
-const CAMERA_MODES = {
-    DEFAULT: {
-        height: 12, // Lower angle (was 18)
-        distance: 10, // Closer (was 15)
-        fov: 65, // Wider FOV (was 50) for speed
-        followSpeed: 4.0, // Snappier follow
-        lookAheadFactor: 0.5
-    },
-    COMBAT: {
-        height: 10,
-        distance: 8,
-        fov: 70, // Action distortion
-        followSpeed: 5.0,
-        lookAheadFactor: 0.6
-    },
-    KNOCKOUT: {
-        height: 6, // Super low & close
-        distance: 5,
-        fov: 45, // Zoom in
-        followSpeed: 8.0,
-        lookAheadFactor: 0
-    },
-    WIDE: {
-        height: 25,
-        distance: 22,
-        fov: 60,
-        followSpeed: 1.5,
-        lookAheadFactor: 0.2
-    }
-};
+// Camera logic simplified for chase focus and spectator action
 
 function DynamicCamera({
     playerPositions,
     localPlayerId,
     shake = 0,
     knockoutTarget = null,
-    slowmo = false
+    slowmo = false,
+    isSpectating = false
 }) {
     const { camera } = useThree();
 
-    // OPTIMIZATION: Reuse vectors instead of creating new ones each frame
-    const vectors = useMemo(() => ({
-        targetPos: new THREE.Vector3(0, 18, 15),
-        lookAtPos: new THREE.Vector3(0, 0, 0),
-        velocity: new THREE.Vector3(),
-        lastCenter: new THREE.Vector3(),
-        tempLookAt: new THREE.Vector3()
-    }), []);
-
     // State refs
-    const currentMode = useRef('DEFAULT');
     const shakeIntensity = useRef(0);
-    const dramaticZoom = useRef(0);
 
     // State for Chase Camera
     const chaseState = useRef({
@@ -153,17 +113,48 @@ function DynamicCamera({
             camera.lookAt(cs.currentLookAt);
 
         }
-        // --- FALLBACK / SPECTATOR LOGIC (Old Logic) ---
+        // --- FALLBACK / SPECTATOR LOGIC (Action View) ---
         else if (positions.length > 0) {
-            // ... (Condensed version of old logic for spectator) ...
-            // Calculate center
+            const cs = chaseState.current;
+            
+            // 1. Calculate center
             let centerX = 0, centerY = 0, centerZ = 0;
-            positions.forEach(p => { centerX += p[0]; centerY += p[1]; centerZ += p[2]; });
+            let maxDist = 0;
+            
+            positions.forEach(p => { 
+                centerX += p[0]; centerY += p[1]; centerZ += p[2]; 
+            });
             centerX /= positions.length; centerY /= positions.length; centerZ /= positions.length;
+            
+            const center = new THREE.Vector3(centerX, centerY, centerZ);
+            
+            // 2. Calculate "Zoom" based on player spread
+            positions.forEach(p => {
+                const pVec = new THREE.Vector3(p[0], p[1], p[2]);
+                const d = center.distanceTo(pVec);
+                if (d > maxDist) maxDist = d;
+            });
 
-            const targetPos = new THREE.Vector3(centerX, 18, centerZ + 15);
-            camera.position.lerp(targetPos, adjustedDelta * 2);
-            camera.lookAt(centerX, 0, centerZ);
+            // 3. Dynamic Height/Dist
+            const baseDist = 18;
+            const targetDist = baseDist + maxDist * 1.2;
+            const targetHeight = 15 + maxDist * 0.5;
+
+            // 4. Smoothly orbit slowly for cinematic feel
+            const orbitSpeed = 0.1;
+            const angle = state.clock.elapsedTime * orbitSpeed;
+            
+            const targetPos = new THREE.Vector3(
+                centerX + Math.sin(angle) * 5, 
+                targetHeight, 
+                centerZ + targetDist
+            );
+            
+            cs.currentPosition.lerp(targetPos, adjustedDelta * 1.5);
+            cs.currentLookAt.lerp(center, adjustedDelta * 2.0);
+
+            camera.position.copy(cs.currentPosition);
+            camera.lookAt(cs.currentLookAt);
         }
     });
 

@@ -23,7 +23,8 @@ New gameplay mechanics, systems, and content.
 - [ ] [feature:announcer] AI Game Announcer: Implement a local LLM/TTS system to commentate on matches (e.g., "DOUBLE KILL!", "WHAT A SAVE!").
 - [ ] [feature:crowd] Crowd Reactions: Dynamic sound engine that cheers/boos based on game intensity.
 - [ ] [feature:replay] Killcam / Replay: Record and playback the last 5 seconds of a knockout.
-- [ ] [feature:ranked] Ranked Matchmaking: Elo-based matchmaking system.
+- [x] [feature:ranked] Global Matchmaking: Persistent server-side queue with fallback systems.
+- [x] [feature:spectator] Spectator Mode: Unlimited observers with cinematic action camera.
 - [ ] [feature:tournament] Tournament Mode: Bracket-style tournament support.
 - [ ] [feature:mobile] Mobile Controls: Responsive touch controls for mobile play.
 - [ ] [feature:velocity] Projectile Tracking: Enhanced velocity tracking for projectiles.

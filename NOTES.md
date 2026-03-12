@@ -59,3 +59,28 @@
 - `CollisionSparks` / `SparkBurst` components in `Puck.jsx` use InstancedMesh
 - Sparks emit at contact midpoint on puck-to-puck hits
 - Auto-removed after 800ms via setTimeout
+
+### Spectator Mode (March 2026)
+
+- Unlimited observers allowed per room via `spectators` Set in server.
+- `DynamicCamera.jsx` implements an "Action Center" follow logic for spectators (center of all players + zoom).
+- `BattleArena.jsx` skips rendering local player components for spectators to save resources.
+
+### Global Matchmaking (March 2026)
+
+- Replaces individual room-hopping with a central `matchmakingQueue` on the server.
+- Matches players in groups of 4 every 2.5s; 10s wait triggers a match with available players + bots.
+- `useMultiplayer.js` automatically handles the `matchFound` event to join the room.
+
+### 🤖 Bot Backfill & AI Proxies (March 2026)
+
+- **Architecture**: Bots are "Server-Side Entities" that simulate player behavior within the 22Hz physics loop. They are broadcast in the `players` map like human players but with an `isBot: true` marker.
+- **IDs**: Bot IDs always follow the pattern `bot_[random_suffix]`.
+- **Combat**: The server performs active collision detection for bots. If a bot is above a human and within 1.5 units, it emits a `stomp` event authoritatively.
+- **Matchmaking**: Bots are spawned in `startGame` if the room has < 4 players.
+- **Replacement**: Bots replace human players after a 60s disconnect timeout or immediately on an AFK kick to maintain 4-player match integrity.
+
+### 🌐 Multi-Region Support (March 2026)
+
+- **Infrastructure**: The client connects to the regional endpoint URL defined in `config.js`. Matchmaking and sessions are currently regional-locked (players only play with others in the same region).
+- **Latency**: Regional servers help, but "Lag Compensation" (Backwards Reconciliation) is the primary safeguard for fair play.

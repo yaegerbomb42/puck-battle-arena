@@ -6,11 +6,19 @@
 // Server URL - Prioritize Environment Variable, fallback to Render URL or localhost
 const SERVER_URL = process.env.REACT_APP_SERVER_URL ||
     (process.env.NODE_ENV === 'production'
-        ? 'https://puck-battle-arena-backend.onrender.com'
+        ? 'https://api.puckoff.tech'
         : 'http://localhost:3002');
+
+// Region Definitions
+export const REGIONS = [
+    { id: 'us-east', name: '🇺🇸 US East', url: SERVER_URL }, // Currently pointing to same for demo
+    { id: 'eu-west', name: '🇪🇺 EU West', url: 'https://api-eu.puckoff.tech' },
+    { id: 'asia', name: '🇯🇵 Tokyo', url: 'https://api-as.puckoff.tech' }
+];
 
 export const CONFIG = {
     SERVER_URL,
+    REGIONS,
 
     // Connection Settings
     CONNECTION: {
