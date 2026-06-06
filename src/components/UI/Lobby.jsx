@@ -4,6 +4,16 @@ import PackOpener from './PackOpener';
 import LoadoutMenu from './LoadoutMenu';
 import IconChooser from './IconChooser';
 import AdminDashboard from './AdminDashboard';
+import SeasonPassModal from './SeasonPassModal';
+import FriendListModal from './FriendListModal';
+import PlayerProfileModal from './PlayerProfileModal';
+import NotificationCenter from './NotificationCenter';
+import LobbyChat from './LobbyChat';
+import TradeModal from './TradeModal';
+import CraftingModal from './CraftingModal';
+import ProModal from './ProModal';
+import HighStakesConfirmModal from './HighStakesConfirmModal';
+import { useMultiplayer } from '../../hooks/useMultiplayer';
 // AdBanner removed from Lobby (AdSense policy: no ads on nav/menu screens)
 import ZoinCube from './ZoinCube';
 import { getIconById } from '../../utils/economy';
@@ -13,7 +23,7 @@ import { audio } from '../../utils/audio';
 
 import { getBiomeList } from '../../utils/mapGenerator';
 import { GAME_MODES } from '../../utils/gameModes';
-import { getLevelFromXp, getLevelProgress, getRankName, getRankFromRP, getRankProgress, RANK_TIERS } from '../../utils/leveling';
+import { getLevelFromXp, getLevelProgress, getRankName, getRankFromRP, getRankProgress } from '../../utils/leveling';
 import { REGIONS } from '../../utils/config';
 
 export default function Lobby({
@@ -39,11 +49,25 @@ export default function Lobby({
     onStartMatchmaking,
     onCancelMatchmaking,
     currentRegion,
-    onSwitchRegion
+    onSwitchRegion,
+    fetchLeaderboard,
+    quests = [],
+    fetchQuests
 }) {
-    const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, updateLoadout, setActiveLoadout, updateUsername, loading, joinWagerMatch, isAdmin } = useAuth();
+    const { user, inventory, loginWithGoogle, loginWithEmail, signupWithEmail, logout, equipIcon, updateLoadout, setActiveLoadout, updateUsername, loading, joinWagerMatch, isAdmin, notifications, sendNotification } = useAuth();
+    const {
+        lastInvite, setLastInvite, invitePlayer, chatMessages, sendChatMessage,
+        dailyShop, purchaseShopItem,
+        tradeInvite, tradeSession, craftItem,
+        sendTradeInvite, respondToTrade, updateTradeOffer, setTradeReady, executeTrade, cancelTrade, // [TRADE] New methods
+        claimProReward // [PRO]
+    } = useMultiplayer(user); // [NEW] Initialize multiplayer context
 
     const [showStore, setShowStore] = useState(false);
+    const [showCrafting, setShowCrafting] = useState(false);
+    const [showProModal, setShowProModal] = useState(false);
+    const [showHSConfirm, setShowHSConfirm] = useState(false);
+    const [pendingAction, setPendingAction] = useState(null);
     const [showLoadout, setShowLoadout] = useState(false);
     const [showIcons, setShowIcons] = useState(false);
     const [showAdmin, setShowAdmin] = useState(false);
@@ -57,10 +81,21 @@ export default function Lobby({
     const [wagerAmount, setWagerAmount] = useState(100);
 
     const [openingPack, setOpeningPack] = useState(null);
-    const [playerName, setPlayerName] = useState(user?.displayName || '');
+    const [playerName, setPlayerName] = useState(inventory?.username || user?.displayName || '');
     const [activePlayers, setActivePlayers] = useState(0);
+
+    const isHighStakesActive = isWagerMode && wagerAmount >= 500;
     const [searchingTime, setSearchingTime] = useState(0);
     const [showRegionMenu, setShowRegionMenu] = useState(false);
+    const [showLeaderboard, setShowLeaderboard] = useState(false);
+    const [leaderboardData, setLeaderboardData] = useState([]);
+    const [leaderboardCategory, setLeaderboardCategory] = useState('rankPoints');
+    const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+    const [showQuests, setShowQuests] = useState(false);
+    const [showSeasonPass, setShowSeasonPass] = useState(false);
+    const [showFriends, setShowFriends] = useState(false); // [NEW] Social state
+    const [selectedProfileUid, setSelectedProfileUid] = useState(null); // [NEW] Profile search state
+    const [showNotifications, setShowNotifications] = useState(false); // [NEW] Notification state
 
     // [NEW] Force Loadout Selection if empty
     React.useEffect(() => {
@@ -176,10 +211,10 @@ export default function Lobby({
         // Simple seeded shuffle
         const shuffled = [...allBiomes];
         let m = shuffled.length, t, idx;
-        let seedRng = Math.abs(hash);
+        let seedRng = (Math.abs(hash) % 1000000) / 1000000; // Normalize hash to a seed between 0 and 1
         while (m) {
-            seedRng = (seedRng * 9301 + 49297) % 233280;
-            idx = Math.floor((seedRng / 233280) * m--);
+            seedRng = (seedRng * 9301 + 49297) % 233280 / 233280; // Simple LCG for pseudo-randomness
+            idx = Math.floor(seedRng * m--);
             t = shuffled[m];
             shuffled[m] = shuffled[idx];
             shuffled[idx] = t;
@@ -218,6 +253,65 @@ export default function Lobby({
                 />
             )}
 
+            {/* LEADERBOARD MODAL */}
+            {showLeaderboard && (
+                <div className="leaderboard-overlay" onClick={() => setShowLeaderboard(false)}>
+                    <div className="leaderboard-modal glass-dark" onClick={e => e.stopPropagation()}>
+                        <div className="lb-header">
+                            <h2>🏆 Global Leaderboard</h2>
+                            <button className="lb-close" onClick={() => setShowLeaderboard(false)}>✕</button>
+                        </div>
+                        <div className="lb-tabs">
+                            {[
+                                { key: 'rankPoints', label: 'Rank Points' },
+                                { key: 'wins', label: 'Wins' },
+                                { key: 'kills', label: 'Kills' }
+                            ].map(tab => (
+                                <button
+                                    key={tab.key}
+                                    className={`lb-tab ${leaderboardCategory === tab.key ? 'active' : ''}`}
+                                    onClick={() => {
+                                        setLeaderboardCategory(tab.key);
+                                        if (fetchLeaderboard) {
+                                            setLeaderboardLoading(true);
+                                            fetchLeaderboard(tab.key)
+                                                .then(data => setLeaderboardData(data))
+                                                .catch(err => console.error(err))
+                                                .finally(() => setLeaderboardLoading(false));
+                                        }
+                                    }}
+                                >{tab.label}</button>
+                            ))}
+                        </div>
+                        <div className="lb-list">
+                            {leaderboardLoading ? (
+                                <div className="lb-loading">Loading...</div>
+                            ) : leaderboardData.length === 0 ? (
+                                <div className="lb-empty">No data yet. Go play some matches! 🎮</div>
+                            ) : (
+                                leaderboardData.map((entry, idx) => (
+                                    <div key={entry.id} className={`lb-row ${idx < 3 ? 'lb-top3' : ''} ${entry.uid === user?.uid ? 'is-self' : ''}`}>
+                                        <div className="lb-rank">
+                                            {idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`}
+                                        </div>
+                                        <div
+                                            className="lb-name player-name clickable"
+                                            onClick={() => entry.uid && setSelectedProfileUid(entry.uid)}
+                                        >
+                                            {entry.name}
+                                        </div>
+                                        <div className="lb-badge" style={{ color: getRankFromRP(entry.rankPoints).color }}>
+                                            {getRankFromRP(entry.rankPoints).name}
+                                        </div>
+                                        <div className="lb-score player-rp">{entry[leaderboardCategory] || 0}</div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {showStore && (
                 <Store
                     onClose={() => setShowStore(false)}
@@ -226,6 +320,8 @@ export default function Lobby({
                         setShowStore(false);
                     }}
                     playerInventory={inventory?.icons || []}
+                    dailyShop={dailyShop}
+                    purchaseShopItem={purchaseShopItem}
                 />
             )}
 
@@ -248,6 +344,7 @@ export default function Lobby({
                 <IconChooser
                     ownedIcons={inventory?.icons || []}
                     equippedIcon={inventory?.equippedSkin}
+                    isLegacy={inventory?.isLegacy}
                     loading={loading}
                     onClose={() => setShowIcons(false)}
                     onSelect={(icon) => {
@@ -257,11 +354,183 @@ export default function Lobby({
                 />
             )}
 
+            {/* [CRAFTING] Modal */}
+            {showCrafting && (
+                <CraftingModal 
+                    onClose={() => setShowCrafting(false)}
+                    inventory={inventory}
+                    craftItem={craftItem}
+                    showNotification={sendNotification}
+                />
+            )}
+
             {showAdmin && (
                 <AdminDashboard onClose={() => setShowAdmin(false)} onTestMaintenance={onTestMaintenance} />
             )}
 
-            {/* Auth Modal */}
+            {showQuests && (
+                <div className="quest-modal-overlay" onClick={() => setShowQuests(false)}>
+                    <div className="quest-modal glass-dark" onClick={e => e.stopPropagation()}>
+                        <div className="quest-header">
+                            <h2>🚀 Daily Challenges</h2>
+                            <button className="quest-close" onClick={() => setShowQuests(false)}>✕</button>
+                        </div>
+                        <div className="quest-list">
+                            {quests.length === 0 ? (
+                                <div className="quest-empty">Loading challenges...</div>
+                            ) : (
+                                quests.map(q => (
+                                    <div key={q.id} className={`quest-item ${q.completed ? 'completed' : ''}`}>
+                                        <div className="quest-info">
+                                            <div className="quest-top">
+                                                <span className="quest-label">{q.label}</span>
+                                                <span className="quest-reward">+ {q.reward} Z</span>
+                                            </div>
+                                            <p className="quest-desc">{q.description}</p>
+                                        </div>
+                                        <div className="quest-progress-container">
+                                            <div className="quest-progress-bar">
+                                                <div 
+                                                    className="quest-progress-fill" 
+                                                    style={{ width: `${Math.min(100, (q.progress / q.goal) * 100)}%` }}
+                                                />
+                                            </div>
+                                            <div className="quest-stats">
+                                                {q.progress} / {q.goal}
+                                            </div>
+                                        </div>
+                                        {q.completed && <div className="quest-check">✓</div>}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showSeasonPass && <SeasonPassModal onClose={() => setShowSeasonPass(false)} />}
+            {showFriends && (
+                <FriendListModal 
+                    onClose={() => setShowFriends(false)} 
+                    invitePlayer={(targetUid) => {
+                        const inviterName = inventory?.username || user?.displayName || 'A Friend';
+                        invitePlayer(targetUid, roomCode || 'LOBBY', inviterName);
+                        sendNotification(targetUid, 'invite', { roomCode: roomCode || 'LOBBY' });
+                    }}
+                    onTradeInvite={sendTradeInvite} // [TRADE] New prop
+                    onProfileClick={setSelectedProfileUid}
+                />
+            )}
+
+            {/* [TRADE] Incoming Invitation Popup */}
+            {tradeInvite && (
+                <div className="trade-invite-popup glass-dark">
+                    <div className="invite-content">
+                        <span className="invite-icon">🤝</span>
+                        <div className="invite-text">
+                            <strong>{tradeInvite.fromUsername}</strong> wants to trade!
+                        </div>
+                    </div>
+                    <div className="invite-actions">
+                        <button className="btn-decline" onClick={() => respondToTrade(tradeInvite.inviteId, false)}>Decline</button>
+                        <button className="btn-accept" onClick={() => respondToTrade(tradeInvite.inviteId, true)}>Accept</button>
+                    </div>
+                </div>
+            )}
+
+            {/* [TRADE] Active Trade Session Modal */}
+            <HighStakesConfirmModal 
+                isOpen={showHSConfirm}
+                amount={wagerAmount}
+                onClose={() => setShowHSConfirm(false)}
+                onConfirm={() => {
+                    setShowHSConfirm(false);
+                    pendingAction?.();
+                }}
+            />
+
+            {tradeSession && (
+                <TradeModal 
+                    session={tradeSession}
+                    user={user}
+                    inventory={inventory}
+                    onUpdate={updateTradeOffer}
+                    onReady={setTradeReady}
+                    onConfirm={executeTrade}
+                    onCancel={cancelTrade}
+                />
+            )}
+
+            <ProModal 
+                isOpen={showProModal}
+                onClose={() => setShowProModal(false)}
+                user={user}
+                isPro={inventory?.isPro}
+                onSubscribe={async () => {
+                    // Simulation of purchase
+                    const res = await fetch('/api/admin/simulate-purchase', {
+                        method: 'POST',
+                        body: JSON.stringify({ email: user.email, packId: 'puckoff_pro' }),
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        setShowProModal(false);
+                        sendNotification(user.uid, 'success', { title: 'PUCKOFF PRO ACTIVATED!', message: 'Welcome to the elite tier.' });
+                    }
+                }}
+            />
+
+            {showNotifications && (
+                <NotificationCenter 
+                    onClose={() => setShowNotifications(false)}
+                    onJoinRoom={onJoinRoom}
+                />
+            )}
+
+            {/* [NEW] Global Lobby Chat */}
+            {connected && !showAuthModal && (
+                <LobbyChat 
+                    user={user} 
+                    inventory={inventory} 
+                    chatMessages={chatMessages || []} 
+                    sendChatMessage={sendChatMessage} 
+                    onProfileClick={setSelectedProfileUid}
+                />
+            )}
+
+            {/* [NEW] Player Profile Modal */}
+            {selectedProfileUid && (
+                <PlayerProfileModal 
+                    uid={selectedProfileUid} 
+                    onClose={() => setSelectedProfileUid(null)}
+                    onInvite={invitePlayer}
+                />
+            )}
+
+            {/* [NEW] Social Invite Notification */}
+            {lastInvite && (
+                <div className="social-invite-toast glass-dark">
+                    <div className="invite-icon">🎖️</div>
+                    <div className="invite-content">
+                        <strong>{lastInvite.inviterName}</strong>
+                        <span>Invited you to a match!</span>
+                    </div>
+                    <div className="invite-actions">
+                        <button className="btn-accept" onClick={() => {
+                            audio.playClick();
+                            onJoinRoom(lastInvite.roomCode);
+                            setLastInvite(null);
+                        }}>Accept</button>
+                        <button className="btn-decline" onClick={() => {
+                            audio.playClick();
+                            setLastInvite(null);
+                        }}>✕</button>
+                    </div>
+                </div>
+            )}
+
+                {/* Auth Modal */}
             {showAuthModal && (
                 <div className="auth-modal-overlay" onClick={() => setShowAuthModal(false)}>
                     <div className="auth-modal glass-dark" onClick={e => e.stopPropagation()}>
@@ -300,7 +569,7 @@ export default function Lobby({
                 </div>
             )}
 
-            <div className="lobby-container glass-dark" style={{ padding: '3rem 2rem', borderTop: '1px solid rgba(255,255,255,0.2)', boxShadow: '0 0 50px rgba(0,212,255,0.1)' }}>
+            <div className={`lobby-container glass-dark ${isHighStakesActive ? 'heat-mode' : ''}`} style={{ padding: '3rem 2rem', borderTop: '1px solid rgba(255,255,255,0.2)', boxShadow: '0 0 50px rgba(0,212,255,0.1)' }}>
                 {/* User Bar */}
                 <div style={{ position: 'absolute', top: '1rem', right: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div className="active-players-pill" title="Players Online">
@@ -332,10 +601,42 @@ export default function Lobby({
                             </div>
                         )}
                     </div>
-                    <button className="btn-settings" onClick={() => { audio.playClick(); onShowSettings(); }} title="Settings">⚙️</button>
+                    <button className="btn-lobby-circle" onClick={() => {
+                        audio.playClick();
+                        setShowLeaderboard(true);
+                        if (fetchLeaderboard) {
+                            setLeaderboardLoading(true);
+                            fetchLeaderboard('rankPoints').then(data => {
+                                setLeaderboardData(data);
+                            }).catch(err => console.error('Leaderboard error:', err)).finally(() => setLeaderboardLoading(false));
+                        }
+                    }} title="Leaderboard">🏆</button>
+                    <button className="btn-lobby-circle" onClick={() => {
+                        audio.playClick();
+                        setShowFriends(true);
+                    }} title="Social / Friends">👥</button>
+                    <button className="btn-lobby-circle" onClick={() => {
+                        audio.playClick();
+                        fetchQuests(user?.uid); // Pass UID to fetch quests
+                        setShowQuests(true);
+                    }} title="Daily Quests">🎯</button>
+                    <button className="btn-lobby-circle" onClick={() => {
+                        audio.playClick();
+                        setShowSeasonPass(true);
+                    }} title="Season Pass">🎖️</button>
+                    <button className="btn-lobby-circle btn-rotate" onClick={() => { audio.playClick(); onShowSettings(); }} title="Settings">⚙️</button>
                     {isAdmin && (
                         <button className="btn-admin-hidden" onClick={() => { audio.playClick(); setShowAdmin(true); }} style={{ opacity: 0.2 }}>🛠️</button>
                     )}
+                    <button className="btn-lobby-circle notify-btn" onClick={() => {
+                        audio.playClick();
+                        setShowNotifications(true);
+                    }} title="Notifications">
+                        🔔
+                        {notifications.filter(n => !n.read).length > 0 && (
+                            <span className="notify-badge">{notifications.filter(n => !n.read).length}</span>
+                        )}
+                    </button>
                     {user && (
                         <>
                             <div className="zoin-wallet-widget" title="My Stash (Zoins)">
@@ -393,6 +694,26 @@ export default function Lobby({
                                         />
                                     </div>
 
+                                    {/* [PRO] Weekly Reward CTA */}
+                                    {inventory?.isPro && (Date.now() - (inventory?.lastProReward || 0) > 7 * 24 * 60 * 60 * 1000) && (
+                                        <button className="pro-reward-cta pulse-gold" onClick={async () => {
+                                            const res = await claimProReward();
+                                            if (res?.success) {
+                                                sendNotification(user.uid, 'success', { title: 'WEEKLY REWARD', message: res.reward });
+                                            } else {
+                                                sendNotification(user.uid, 'error', { title: 'REWARD FAILED', message: res?.error });
+                                            }
+                                        }}>
+                                            🎁 CLAIM PRO REWARD
+                                        </button>
+                                    )}
+
+                                    {!inventory?.isPro && (
+                                        <button className="pro-btn-lobby" onClick={() => setShowProModal(true)}>
+                                            ✨ UPGRADE TO PRO
+                                        </button>
+                                    )}
+
                                     {/* Rank Display */}
                                     <div className="rank-container">
                                         <div className="rank-badge" style={{ borderColor: getRankFromRP(inventory?.rankPoints || 0).color }}>
@@ -423,6 +744,16 @@ export default function Lobby({
                                 onChange={handleNameChange}
                                 onBlur={saveName} // Save on blur
                             />
+                            {inventory?.isPro && (
+                                <div className="pro-badge-lobby" title="PuckOff Pro Member">
+                                    PRO
+                                </div>
+                            )}
+                            {inventory?.isLegacy && (
+                                <div className="legacy-player-badge" title="Legacy Alpha Tester">
+                                    <span className="badge-star">★</span> LEGACY
+                                </div>
+                            )}
                         </div>
 
                         <div className="main-buttons">
@@ -452,7 +783,7 @@ export default function Lobby({
                                 </div>
                                 {isWagerMode && (
                                     <div style={{ fontSize: '0.75rem', color: '#aaa', textAlign: 'center' }}>
-                                        Winner Takes: <span style={{ color: '#00ff87' }}>{Math.floor(wagerAmount * 2 * 0.9)} Z</span> (10% House Fee)
+                                        Winner Takes: <span style={{ color: '#00ff87' }}>{Math.floor(wagerAmount * 2 * (inventory?.isPro ? 1.0 : 0.9))} Z</span> {inventory?.isPro ? '(0% PRO FEE!)' : '(10% House Fee)'}
                                     </div>
                                 )}
                             </div>
@@ -465,16 +796,25 @@ export default function Lobby({
                                         return;
                                     }
                                     audio.playClick();
-                                    if (isWagerMode) {
-                                        if ((inventory?.zoins || 0) < wagerAmount) {
-                                            alert("Low Fuel! Top up Zoins at the Store.");
-                                            setShowStore(true);
-                                            return;
+                                    const joinAction = async () => {
+                                        if (isWagerMode) {
+                                            if ((inventory?.zoins || 0) < wagerAmount) {
+                                                alert("Low Fuel! Top up Zoins at the Store.");
+                                                setShowStore(true);
+                                                return;
+                                            }
+                                            const joined = await joinWagerMatch(wagerAmount);
+                                            if (!joined) return;
                                         }
-                                        const joined = await joinWagerMatch(wagerAmount);
-                                        if (!joined) return;
+                                        onStartMatchmaking(playerName, user?.email, null, wagerAmount);
+                                    };
+
+                                    if (isHighStakesActive) {
+                                        setPendingAction(() => joinAction);
+                                        setShowHSConfirm(true);
+                                    } else {
+                                        joinAction();
                                     }
-                                    onStartMatchmaking(playerName, user?.email);
                                 }}
                             >
                                 {isWagerMode ? `⚔️ WAGER ${wagerAmount} Z` : (user ? '⚡ QUICK PLAY' : '🔒 SIGN IN TO PLAY')}
@@ -487,7 +827,12 @@ export default function Lobby({
                                         return;
                                     }
                                     audio.playClick();
-                                    onCreateRoom(playerName, user?.email);
+                                    if (isHighStakesActive) {
+                                        setPendingAction(() => () => onCreateRoom(playerName, user?.email));
+                                        setShowHSConfirm(true);
+                                    } else {
+                                        onCreateRoom(playerName, user?.email);
+                                    }
                                 }}
                             >
                                 {user ? '🏠 CREATE ROOM' : '🔒 CREATE ROOM'}
@@ -502,7 +847,14 @@ export default function Lobby({
                             <button className="btn btn-small" onClick={() => {
                                 audio.playClick();
                                 const code = document.getElementById('roomCodeInput').value;
-                                if (code) onJoinRoom(code, playerName, user?.email);
+                                if (code) {
+                                    if (isHighStakesActive) {
+                                        setPendingAction(() => () => onJoinRoom(code, playerName, user?.email));
+                                        setShowHSConfirm(true);
+                                    } else {
+                                        onJoinRoom(code, playerName, user?.email);
+                                    }
+                                }
                             }}>JOIN</button>
                         </div>
 
@@ -523,6 +875,9 @@ export default function Lobby({
                         <div className="cosmetics-row">
                             <button className="btn btn-store" onClick={() => { audio.playClick(); setShowStore(true); }}>
                                 🛒 STORE
+                            </button>
+                            <button className="btn btn-forge" onClick={() => { audio.playClick(); setShowCrafting(true); }}>
+                                ⚒️ FORGE
                             </button>
 
                             {/* Replaced old skin selector with proper Icon Selector UI */}
@@ -694,13 +1049,29 @@ export default function Lobby({
                 .btn-login { background: linear-gradient(45deg, #00d4ff, #00ff87); color: #000; }
                 .btn-wager { background: linear-gradient(45deg, #ff006e, #ffd700); color: #000; border: none; cursor: pointer; animation: pulse 1.5s infinite; }
                 .btn-admin-hidden:hover { opacity: 1; }
-                .btn-settings {
-                    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
-                    border-radius: 50%; width: 40px; height: 40px; display: flex;
+                .btn-lobby-circle {
+                    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2);
+                    border-radius: 50%; width: 44px; height: 44px; display: flex;
                     align-items: center; justify-content: center; cursor: pointer;
-                    color: white; font-size: 1.2rem; transition: all 0.3s;
+                    color: white; font-size: 1.3rem; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
                 }
-                .btn-settings:hover { background: rgba(0,212,255,0.2); border-color: #00d4ff; transform: rotate(45deg); }
+                .btn-lobby-circle:hover { 
+                    background: rgba(255,255,255,0.2); border-color: #fff; 
+                    transform: scale(1.15);
+                    box-shadow: 0 0 20px rgba(255,255,255,0.3);
+                }
+                .btn-rotate:hover { transform: scale(1.15) rotate(45deg); }
+
+                .notify-btn { position: relative; }
+                .notify-badge {
+                    position: absolute; top: -5px; right: -5px;
+                    background: #ff006e; color: white;
+                    font-size: 0.65rem; font-weight: 800;
+                    padding: 2px 6px; border-radius: 10px;
+                    box-shadow: 0 0 10px rgba(255,0,110,0.5);
+                    border: 1px solid rgba(255,255,255,0.2);
+                    min-width: 14px; text-align: center;
+                }
 
                 .btn-admin-hidden:hover { opacity: 1; }
 
@@ -890,13 +1261,13 @@ export default function Lobby({
                     align-items: center;
                     overflow: hidden;
                 }
-                .btn-store { 
+                .btn-store, .btn-forge { 
                     width: 100px; background: linear-gradient(135deg, #ffd700, #ff8c00); 
                     color: #000; font-weight: bold; padding: 0.8rem;
                     border-radius: 12px; border: none; cursor: pointer;
                     font-size: 0.85rem; transition: transform 0.2s;
                 }
-                .btn-store:hover { transform: scale(1.05); }
+                .btn-store:hover, .btn-forge:hover { transform: scale(1.05); }
 
                 .equipped-icon-preview {
                     flex: 1;
@@ -1281,6 +1652,360 @@ export default function Lobby({
                     height: 100%;
                     transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
                     box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+                }
+
+                /* Leaderboard Modal */
+                .leaderboard-overlay {
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(0, 0, 0, 0.7);
+                    backdrop-filter: blur(8px);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 9999;
+                    animation: fadeIn 0.2s ease;
+                }
+                .leaderboard-modal {
+                    width: 500px;
+                    max-width: 90vw;
+                    max-height: 80vh;
+                    border-radius: 16px;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                    animation: slideUp 0.3s cubic-bezier(0.2, 0, 0, 1);
+                }
+                @keyframes slideUp {
+                    from { transform: translateY(30px); opacity: 0; }
+                    to { transform: translateY(0); opacity: 1; }
+                }
+                .lb-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 1.25rem 1.5rem;
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                }
+                .lb-header h2 {
+                    margin: 0;
+                    font-size: 1.1rem;
+                    font-family: 'Orbitron', sans-serif;
+                    letter-spacing: 1px;
+                }
+                .lb-close {
+                    background: none;
+                    border: none;
+                    color: rgba(255, 255, 255, 0.5);
+                    font-size: 1.2rem;
+                    cursor: pointer;
+                    transition: color 0.2s;
+                }
+                .lb-close:hover { color: #ff006e; }
+                .lb-tabs {
+                    display: flex;
+                    gap: 0;
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+                }
+                .lb-tab {
+                    flex: 1;
+                    padding: 0.75rem;
+                    background: none;
+                    border: none;
+                    color: rgba(255, 255, 255, 0.4);
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    border-bottom: 2px solid transparent;
+                    font-family: 'Orbitron', sans-serif;
+                }
+                .lb-tab:hover { color: rgba(255, 255, 255, 0.7); }
+                .lb-tab.active {
+                    color: #00d4ff;
+                    border-bottom-color: #00d4ff;
+                }
+                .lb-list {
+                    flex: 1;
+                    overflow-y: auto;
+                    padding: 0.5rem;
+                }
+                .lb-row {
+                    display: grid;
+                    grid-template-columns: 50px 1fr auto 80px;
+                    align-items: center;
+                    padding: 0.6rem 0.8rem;
+                    border-radius: 8px;
+                    transition: background 0.2s;
+                    gap: 0.5rem;
+                }
+                .lb-row:hover { background: rgba(255, 255, 255, 0.03); }
+                .lb-top3 {
+                    background: rgba(255, 215, 0, 0.03);
+                    border: 1px solid rgba(255, 215, 0, 0.08);
+                }
+                .lb-rank {
+                    font-size: 0.9rem;
+                    text-align: center;
+                    font-weight: 700;
+                    opacity: 0.7;
+                }
+                .lb-name {
+                    font-weight: 600;
+                    font-size: 0.85rem;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+                .lb-badge {
+                    font-size: 0.7rem;
+                    font-weight: 900;
+                    font-family: 'Orbitron', sans-serif;
+                    letter-spacing: 0.5px;
+                }
+                .lb-score {
+                    text-align: right;
+                    font-weight: 700;
+                    font-size: 0.9rem;
+                    color: #00d4ff;
+                    font-family: 'Orbitron', sans-serif;
+                }
+                .lb-loading, .lb-empty {
+                    text-align: center;
+                    padding: 3rem 1rem;
+                    opacity: 0.5;
+                    font-size: 0.9rem;
+                }
+
+                /* Trade Invitation Popup */
+                .trade-invite-popup {
+                    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+                    background: rgba(15,10,25,0.9); border: 1px solid #00ff87;
+                    border-radius: 15px; padding: 1rem 1.5rem; z-index: 3000;
+                    display: flex; align-items: center; gap: 2rem;
+                    box-shadow: 0 0 30px rgba(0,255,135,0.2);
+                    animation: slideUp 0.3s ease-out;
+                }
+                .invite-content { display: flex; align-items: center; gap: 1rem; }
+                .invite-icon { font-size: 1.5rem; }
+                .invite-text { font-size: 0.9rem; }
+                .invite-actions { display: flex; gap: 0.5rem; }
+                .btn-accept { 
+                    background: #00ff87; color: black; border: none; 
+                    padding: 0.5rem 1rem; border-radius: 8px; font-weight: bold; cursor: pointer;
+                }
+                .btn-decline { 
+                    background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2);
+                    padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer;
+                }
+
+                @keyframes slideUp { from { transform: translate(-50%, 50px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+                /* Daily Quests UI */
+                .quest-modal-overlay {
+                    position: fixed;
+                    top: 0; left: 0; right: 0; bottom: 0;
+                    background: rgba(0,0,0,0.85);
+                    backdrop-filter: blur(10px);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 1500;
+                    animation: fadeIn 0.3s ease;
+                }
+                .quest-modal {
+                    width: 450px;
+                    max-width: 90%;
+                    padding: 2.5rem;
+                    border-radius: 20px;
+                    border: 1px solid rgba(255,255,255,0.1);
+                    position: relative;
+                }
+                .quest-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 2rem;
+                }
+                .quest-header h2 {
+                    font-family: 'Orbitron', sans-serif;
+                    margin: 0;
+                    font-size: 1.5rem;
+                    letter-spacing: 2px;
+                    color: #00d4ff;
+                    text-shadow: 0 0 15px rgba(0,212,255,0.5);
+                }
+                .quest-close {
+                    background: none;
+                    border: none;
+                    color: white;
+                    font-size: 1.5rem;
+                    cursor: pointer;
+                    opacity: 0.5;
+                    transition: 0.2s;
+                }
+                .quest-close:hover { opacity: 1; transform: rotate(90deg); }
+                
+                .quest-list {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 1.5rem;
+                }
+                .quest-item {
+                    background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(255,255,255,0.05);
+                    padding: 1.25rem;
+                    border-radius: 12px;
+                    position: relative;
+                    transition: 0.3s;
+                }
+                .quest-item.completed {
+                    border-color: rgba(0,255,135,0.3);
+                    background: rgba(0,255,135,0.03);
+                }
+                .quest-top {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 0.5rem;
+                }
+                .quest-label {
+                    font-weight: 700;
+                    font-family: 'Orbitron', sans-serif;
+                    font-size: 0.9rem;
+                    color: #fff;
+                }
+                .quest-reward {
+                    color: #ffd700;
+                    font-weight: 900;
+                    font-size: 0.8rem;
+                }
+                .quest-desc {
+                    margin: 0 0 1rem 0;
+                    font-size: 0.8rem;
+                    opacity: 0.6;
+                }
+                .quest-progress-container {
+                    display: flex;
+                    align-items: center;
+                    gap: 1rem;
+                }
+                .quest-progress-bar {
+                    flex-grow: 1;
+                    height: 6px;
+                    background: rgba(255,255,255,0.05);
+                    border-radius: 3px;
+                    overflow: hidden;
+                }
+                .quest-progress-fill {
+                    height: 100%;
+                    background: linear-gradient(90deg, #00d4ff, #00ff87);
+                    box-shadow: 0 0 10px rgba(0,212,255,0.5);
+                    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+                }
+                .quest-stats {
+                    font-size: 0.75rem;
+                    font-family: 'Orbitron', sans-serif;
+                    opacity: 0.8;
+                    min-width: 45px;
+                    text-align: right;
+                }
+                .quest-check {
+                    position: absolute;
+                    top: -10px; right: -10px;
+                    background: #00ff87;
+                    color: #000;
+                    width: 24px; height: 24px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: bold;
+                    box-shadow: 0 0 15px rgba(0,255,135,0.5);
+                    animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                }
+
+                @keyframes popIn {
+                    from { transform: scale(0); }
+                    to { transform: scale(1); }
+                }
+                @keyframes fadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                
+                .legacy-player-badge {
+                    position: absolute; top: -12px; right: 10px;
+                    background: linear-gradient(90deg, #ff006e, #ff8e00);
+                    color: white; font-size: 0.6rem; font-weight: 900;
+                    padding: 2px 10px; border-radius: 4px;
+                    box-shadow: 0 0 10px rgba(255,0,110,0.4);
+                    z-index: 5; letter-spacing: 1px;
+                    border: 1px solid rgba(255,255,255,0.2);
+                    display: flex; align-items: center; gap: 4px;
+                }
+                .badge-star { color: #ffd700; font-size: 0.75rem; }
+
+                /* Pro UI */
+                .pro-badge-lobby {
+                    position: absolute; top: -12px; right: 80px;
+                    background: linear-gradient(90deg, #ffd700, #ff8e00);
+                    color: black; font-size: 0.65rem; font-weight: 900;
+                    padding: 2px 10px; border-radius: 4px;
+                    box-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
+                    z-index: 5; letter-spacing: 1px;
+                }
+                .pro-btn-lobby {
+                    margin-top: 15px;
+                    width: 100%;
+                    padding: 10px;
+                    background: rgba(255, 215, 0, 0.1);
+                    border: 1px solid rgba(255, 215, 0, 0.3);
+                    border-radius: 12px;
+                    color: #ffd700;
+                    font-size: 0.8rem;
+                    font-weight: bold;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    text-transform: uppercase;
+                    letter-spacing: 1px;
+                }
+                .pro-btn-lobby:hover {
+                    background: rgba(255, 215, 0, 0.2);
+                    box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
+                }
+                .pro-reward-cta {
+                    margin-top: 15px;
+                    width: 100%;
+                    padding: 12px;
+                    background: linear-gradient(135deg, #ffd700, #ff8c00);
+                    border: none;
+                    border-radius: 12px;
+                    color: black;
+                    font-weight: 900;
+                    font-size: 0.85rem;
+                    cursor: pointer;
+                    font-family: 'Orbitron', sans-serif;
+                }
+                .pulse-gold {
+                    animation: pulseGold 2s infinite;
+                }
+                @keyframes pulseGold {
+                    0% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.7); }
+                    70% { box-shadow: 0 0 0 10px rgba(255, 215, 0, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0); }
+                }
+
+                /* HEAT MODE EFFECT */
+                .lobby-main-screen.heat-mode {
+                    box-shadow: inset 0 0 200px rgba(255, 69, 0, 0.4), inset 0 0 50px rgba(255, 215, 0, 0.2);
+                    animation: heatPulse 1s infinite alternate;
+                    border: 2px solid rgba(255, 69, 0, 0.3);
+                }
+                @keyframes heatPulse {
+                    from { box-shadow: inset 0 0 150px rgba(255, 69, 0, 0.3); border-color: rgba(255, 69, 0, 0.3); }
+                    to { box-shadow: inset 0 0 250px rgba(255, 69, 0, 0.5); border-color: rgba(255, 215, 0, 0.5); }
                 }
             `}</style>
         </div>

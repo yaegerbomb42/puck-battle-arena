@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import CONFIG from '../utils/config';
 
-export function useMultiplayer() {
+export function useMultiplayer(user) {
+    const userEmail = user?.email;
+    const uid = user?.uid;
     const [socket, setSocket] = useState(null);
     const [connected, setConnected] = useState(false);
     const [roomCode, setRoomCode] = useState(localStorage.getItem(CONFIG.STORAGE_KEYS.ROOM_CODE) || null);
@@ -16,6 +18,7 @@ export function useMultiplayer() {
     const [scores, setScores] = useState({});
     const [serverPowerups, setServerPowerups] = useState([]);
     const [winner, setWinner] = useState(null);
+    const [honors, setHonors] = useState(null); // [NEW] Track match honors
     const [selectedMap, setSelectedMap] = useState('PROCEDURAL');
     const [selectedMode, setSelectedMode] = useState('knockout');
     const [currentRegion, setCurrentRegion] = useState(CONFIG.REGIONS[0]);
@@ -39,9 +42,18 @@ export function useMultiplayer() {
     // Spectator Mode
     const [isSpectating, setIsSpectating] = useState(false);
     const [spectatorCount, setSpectatorCount] = useState(0);
+    const [quests, setQuests] = useState([]);
+    const [wagerAmount, setWagerAmount] = useState(0); // [NEW] Track active match wager
 
     // Matchmaking State
     const [matchmakingStatus, setMatchmakingStatus] = useState('idle'); // idle, searching
+    const [dailyShop, setDailyShop] = useState({ items: [], lastRotation: 0 }); // [SHOP] Daily featured items
+    
+    // [NEW] Social State
+    const [lastInvite, setLastInvite] = useState(null); // { inviterName, roomCode }
+    const [chatMessages, setChatMessages] = useState([]); // [NEW] Global chat
+    const [tradeInvite, setTradeInvite] = useState(null); // [TRADE] Incoming invite: { inviteId, fromUid, fromUsername }
+    const [tradeSession, setTradeSession] = useState(null); // [TRADE] Active session data
     
     // Event handlers ref
     const handlersRef = useRef({});
@@ -114,6 +126,11 @@ export function useMultiplayer() {
             reconnectionDelay: CONFIG.CONNECTION.RECONNECTION_DELAY
         });
 
+        // [NEW] Presence Registration
+        if (uid && userEmail) {
+            newSocket.emit('registerPresence', { uid, email: userEmail });
+        }
+
         newSocket.on('connect', () => {
             console.log('✅ Connected to server:', CONFIG.SERVER_URL);
             setConnected(true);
@@ -164,6 +181,21 @@ export function useMultiplayer() {
             localStorage.setItem(CONFIG.STORAGE_KEYS.PLAYER_ID, playerId);
         });
 
+        // [NEW] Fetch Chat History on connect
+        newSocket.emit('getChatHistory', (response) => {
+            if (response && response.history) {
+                setChatMessages(response.history);
+            }
+        });
+
+        newSocket.on('chatMessage', (msg) => {
+            setChatMessages(prev => {
+                const next = [...prev, msg];
+                if (next.length > 50) next.shift();
+                return next;
+            });
+        });
+
         newSocket.on('afkWarning', (data) => {
             console.warn(`⚠️ AFK Warning: You will be kicked in ${data.timeLeft} seconds if you don't move!`);
             setServerMessage(`⚠️ AFK Warning: Move to stay in game! (${data.timeLeft}s)`);
@@ -186,6 +218,10 @@ export function useMultiplayer() {
             setConnectionError(err.message);
         });
 
+        newSocket.on('shop_update', (data) => {
+            setDailyShop(data);
+        });
+
         newSocket.on('disconnect', () => {
             console.log('❌ Disconnected from server');
             setConnected(false);
@@ -206,12 +242,13 @@ export function useMultiplayer() {
             console.log('👤 Player left:', playerId);
         });
 
-        newSocket.on('gameStart', ({ players, selectedMap, seed, mode }) => {
+        newSocket.on('gameStart', ({ players, selectedMap, seed, mode, wagerAmount }) => {
             setGameState('playing');
             if (players) setPlayers(players);
             if (selectedMap) setSelectedMap(selectedMap);
             if (seed) setSeed(seed);
             if (mode) setSelectedMode(mode);
+            if (wagerAmount) setWagerAmount(wagerAmount); // [NEW] Capture wager
             setScores({});
         });
 
@@ -262,11 +299,12 @@ export function useMultiplayer() {
             handlersRef.current.onPowerupRejected?.(powerupId);
         });
 
-        newSocket.on('gameOver', ({ winnerId, scores: finalScores, stats }) => {
+        newSocket.on('gameOver', ({ winnerId, scores: finalScores, honors }) => {
             setScores(finalScores);
             setWinner(winnerId);
             setGameState('ended');
-            handlersRef.current.onGameOver?.(winnerId, finalScores, stats);
+            setHonors(honors); // [NEW] Store match honors
+            handlersRef.current.onGameOver?.(winnerId, finalScores, honors);
         });
 
         newSocket.on('rewardEarned', ({ packs, credits, isWinner }) => {
@@ -284,6 +322,13 @@ export function useMultiplayer() {
 
         newSocket.on('matchmakingUpdate', ({ status }) => {
             setMatchmakingStatus(status);
+        });
+
+        newSocket.on('matchInvite', (invite) => {
+            console.log('📧 Received match invite:', invite);
+            setLastInvite(invite);
+            // Auto-clear invite after 15 seconds
+            setTimeout(() => setLastInvite(prev => prev === invite ? null : prev), 15000);
         });
 
         newSocket.on('matchFound', ({ roomCode }) => {
@@ -347,11 +392,18 @@ export function useMultiplayer() {
             }));
         });
 
+        newSocket.on('questsUpdated', ({ quests: newQuests, zoinsGained }) => {
+            console.log(`🎯 Quests Updated! Gained ${zoinsGained} Zoins`);
+            setQuests(newQuests);
+        });
+
         // Maintenance / Server Messages
         newSocket.on('server_message', (msg) => {
             console.log('📢 Server Message:', msg);
             setServerMessage(msg);
-            localStorage.setItem('server_message', JSON.stringify(msg));
+            if (msg.message) {
+                localStorage.setItem('server_message', JSON.stringify(msg));
+            }
 
             // Auto-clear notification after some time if it's not permanent
             if (msg.duration && msg.type !== 'maintenance') {
@@ -362,13 +414,73 @@ export function useMultiplayer() {
             }
         });
 
+        // --- [TRADE] LISTENERS ---
+        newSocket.on('trade_invitation', (data) => {
+            setTradeInvite(data);
+        });
+
+        newSocket.on('trade_started', ({ tradeId, session }) => {
+            setTradeInvite(null);
+            setTradeSession(session);
+        });
+
+        newSocket.on('trade_sync', (session) => {
+            setTradeSession(session);
+        });
+
+        newSocket.on('trade_completed', () => {
+            setTradeSession(null);
+        });
+
+        newSocket.on('trade_cancelled', () => {
+            setTradeSession(null);
+        });
+
+        newSocket.on('trade_declined', ({ by }) => {
+            setTradeInvite(null);
+        });
+
         return () => {
             console.log(`🔌 Disconnecting from ${currentRegion.name}...`);
             newSocket.disconnect();
         };
-    }, [currentRegion.url, currentRegion.name, lastServerTick, leaveRoom]);
+    }, [currentRegion.url, currentRegion.name, lastServerTick, leaveRoom, uid, userEmail]);
 
     // ========== ROOM ACTIONS ==========
+
+    const fetchLeaderboard = useCallback((category = 'rankPoints') => {
+        if (!socket) return Promise.reject('Not connected to server.');
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject('Server Timeout: Failed to fetch leaderboard'), 5000);
+
+            socket.emit('getLeaderboard', { category }, (response) => {
+                clearTimeout(timeout);
+                if (response.success) {
+                    resolve(response.leaderboard);
+                } else {
+                    reject(response.error || 'Failed to fetch leaderboard');
+                }
+            });
+        });
+    }, [socket]);
+
+    const fetchQuests = useCallback((email) => {
+        if (!socket || !email) return Promise.reject('Missing socket or email');
+        return new Promise((resolve, reject) => {
+            socket.emit('getQuests', { email }, (res) => {
+                if (res.success) {
+                    setQuests(res.quests);
+                    resolve(res.quests);
+                } else reject(res.error);
+            });
+        });
+    }, [socket]);
+
+    const trackGameplayStat = useCallback((email, statType) => {
+        if (!socket || !email) return;
+        socket.emit('trackGameplayStat', { email, statType });
+    }, [socket]);
 
     const createRoom = useCallback((playerName, userEmail) => {
         if (isOffline) {
@@ -421,6 +533,7 @@ export function useMultiplayer() {
             const skinData = {
                 skinId: localStorage.getItem('equipped_skin'),
                 skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                puckId: localStorage.getItem('equipped_puck_id'), // [PHASE 3]
                 color: playerColor
             };
 
@@ -471,6 +584,7 @@ export function useMultiplayer() {
             const skinData = {
                 skinId: localStorage.getItem('equipped_skin'),
                 skinTier: parseInt(localStorage.getItem('equipped_skin_tier') || '0'),
+                puckId: localStorage.getItem('equipped_puck_id'), // [PHASE 3]
                 color: playerColor
             };
 
@@ -613,7 +727,12 @@ export function useMultiplayer() {
     const sendInput = useCallback((input) => {
         if (!socket || gameState !== 'playing' || isOffline) return;
         socket.emit('playerInput', input);
-    }, [socket, gameState, isOffline]);
+
+        // Track dash for quests
+        if (input.dash && userEmail) {
+            trackGameplayStat(userEmail, 'dash');
+        }
+    }, [socket, gameState, isOffline, userEmail, trackGameplayStat]);
 
     const reportKnockout = useCallback((knockedOutId) => {
         if (!socket) return;
@@ -633,7 +752,12 @@ export function useMultiplayer() {
     const collectPowerup = useCallback((powerupId) => {
         if (!socket) return;
         socket.emit('powerupCollected', { powerupId });
-    }, [socket]);
+
+        // Track powerup collection for quests
+        if (userEmail) {
+            trackGameplayStat(userEmail, 'powerup');
+        }
+    }, [socket, userEmail, trackGameplayStat]);
 
     const usePowerup = useCallback((powerupId, targetPosition) => {
         if (!socket) return;
@@ -700,6 +824,69 @@ export function useMultiplayer() {
         console.log('Test Maintenance Triggered');
     }, []);
 
+    // --- [TRADE] METHODS ---
+    const sendTradeInvite = useCallback((targetUid) => {
+        if (!socket) return Promise.reject('Not connected');
+        return new Promise((resolve) => {
+            socket.emit('trade_invite', { targetUid }, resolve);
+        });
+    }, [socket]);
+
+    const respondToTrade = useCallback((inviteId, accept) => {
+        if (!socket) return;
+        socket.emit('trade_respond', { inviteId, accept }, (res) => {
+            if (!accept) setTradeInvite(null);
+        });
+    }, [socket]);
+
+    const updateTradeOffer = useCallback((tradeId, items, zoins) => {
+        if (!socket) return;
+        socket.emit('trade_update_offer', { tradeId, items, zoins });
+    }, [socket]);
+
+    const setTradeReady = useCallback((tradeId, ready) => {
+        if (!socket) return;
+        socket.emit('trade_ready', { tradeId, ready });
+    }, [socket]);
+
+    const executeTrade = useCallback((tradeId) => {
+        if (!socket) return Promise.reject('Not connected');
+        return new Promise((resolve) => {
+            socket.emit('trade_execute', { tradeId }, resolve);
+        });
+    }, [socket]);
+
+    const cancelTrade = useCallback((tradeId) => {
+        if (!socket) return;
+        socket.emit('trade_cancel', { tradeId });
+        setTradeSession(null);
+    }, [socket]);
+
+    // --- [PRO] ---
+    const claimProReward = useCallback(() => {
+        if (!socket) return Promise.reject('Not connected');
+        return new Promise((resolve) => {
+            socket.emit('claim_pro_reward', resolve);
+        });
+    }, [socket]);
+
+    // --- [CRAFTING] METHODS ---
+    const craftItem = useCallback((recipeId, itemIds) => {
+        if (!socket) return Promise.reject('Not connected');
+        return new Promise((resolve) => {
+            socket.emit('craft_item', { recipeId, itemIds }, resolve);
+        });
+    }, [socket]);
+
+    const purchaseShopItem = useCallback((itemId) => {
+        if (!socket) return;
+        return new Promise((resolve) => {
+            socket.emit('purchaseShopItem', { itemId }, (res) => {
+                resolve(res);
+            });
+        });
+    }, [socket]);
+
     // ========== HANDLER REGISTRATION ==========
 
     const switchRegion = useCallback((regionId) => {
@@ -728,6 +915,8 @@ export function useMultiplayer() {
         scores,
         serverPowerups,
         winner,
+        honors,
+        setHonors,
         selectedMap,
         selectedMode,
         seed,
@@ -746,11 +935,19 @@ export function useMultiplayer() {
         startMatchmaking,
         cancelMatchmaking,
 
+        // Social
+        lastInvite,
+        setLastInvite,
+        invitePlayer: (targetUid, roomCode, inviterName) => {
+            if (socket) socket.emit('invitePlayer', { targetUid, roomCode, inviterName });
+        },
+
         // Spectator Mode
         isSpectating,
         spectatorCount,
         joinAsSpectator,
         exitSpectator,
+        wagerAmount, // [NEW] Expose wager
 
         // Room actions
         currentRegion,
@@ -776,18 +973,51 @@ export function useMultiplayer() {
         reportGameEnd,
         requestRematch,
 
+        // Leaderboard
+        fetchLeaderboard,
+
+        // Quests
+        quests,
+        fetchQuests,
+        trackGameplayStat,
+
         // Handlers
-        registerHandlers
+        registerHandlers,
+
+        // Chat
+        chatMessages,
+        sendChatMessage: (username, message, skinTier, uid) => {
+            if (socket && message) {
+                socket.emit('sendChatMessage', { username, message, skinTier, uid });
+            }
+        },
+
+        // Shop
+        dailyShop,
+        purchaseShopItem,
+        tradeInvite, setTradeInvite, tradeSession,
+        sendTradeInvite, respondToTrade, updateTradeOffer, setTradeReady, executeTrade, cancelTrade,
+        
+        // Crafting
+        craftItem,
+        
+        // [PRO]
+        claimProReward
     }), [
         connected, socket, roomCode, playerId, playerColor, playerIndex, players,
-        gameState, scores, serverPowerups, winner, selectedMap, selectedMode,
+        gameState, scores, serverPowerups, winner, honors, selectedMap, selectedMode,
         seed, mapVotes, timer, connectionError, isOffline, enableOfflineMode,
         serverMessage, triggerTestMaintenance, isSpectating, spectatorCount,
-        matchmakingStatus, startMatchmaking, cancelMatchmaking,
+        matchmakingStatus, startMatchmaking, cancelMatchmaking, wagerAmount,
         currentRegion, switchRegion,
         joinAsSpectator, exitSpectator, createRoom, joinRoom, quickJoin,
         setReady, leaveRoom, voteMap, selectMode, sendPosition, sendInput,
         reportKnockout, reportStomp, reportDamage, collectPowerup,
-        usePowerup, reportGameEnd, requestRematch, registerHandlers
+        usePowerup, reportGameEnd, requestRematch, fetchLeaderboard,
+        quests, fetchQuests, trackGameplayStat, registerHandlers,
+        lastInvite, setLastInvite, chatMessages, dailyShop, purchaseShopItem,
+        tradeInvite, tradeSession, sendTradeInvite, respondToTrade,
+        updateTradeOffer, setTradeReady, executeTrade, cancelTrade, craftItem,
+        claimProReward
     ]);
 }

@@ -96,3 +96,17 @@ export function getRankName(level) {
     const rankLevel = ranks.find(r => level >= r);
     return RANK_NAMES[rankLevel] || "Recruit";
 }
+
+// Season Pass Rewards (XP Thresholds)
+export const SEASON_PASS_REWARDS = [
+    { level: 1, requiredXp: 1000, rewardType: 'zoin', amount: 100, label: '100 Zoins' },
+    { level: 2, requiredXp: 2500, rewardType: 'zoin', amount: 250, label: '250 Zoins' },
+    { level: 3, requiredXp: 5000, rewardType: 'skin', amount: 1011, label: 'Exclusive Skin' }, // Assuming 1011 is a new skin
+    { level: 4, requiredXp: 8000, rewardType: 'zoin', amount: 500, label: '500 Zoins' },
+    { level: 5, requiredXp: 12000, rewardType: 'zoin', amount: 1000, label: '1000 Zoins' },
+    { level: 6, requiredXp: 18000, rewardType: 'skin', amount: 1012, label: 'Epic Skin' },
+    { level: 7, requiredXp: 25000, rewardType: 'zoin', amount: 2000, label: '2000 Zoins' },
+    { level: 8, requiredXp: 35000, rewardType: 'skin', amount: 1013, label: 'Legendary Skin' },
+    { level: 9, requiredXp: 50000, rewardType: 'zoin', amount: 5000, label: '5000 Zoins' },
+    { level: 10, requiredXp: 75000, rewardType: 'skin', amount: 1014, label: 'Divine Skin' },
+];

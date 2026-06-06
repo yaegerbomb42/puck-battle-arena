@@ -31,7 +31,9 @@ function useParticles(active, count = 30) {
 export default function RewardPopup({ reward, onClose }) {
     const [phase, setPhase] = useState('idle'); // idle -> entering -> counting -> holding -> exiting
     const [displayAmount, setDisplayAmount] = useState(0);
+    const [displayXP, setDisplayXP] = useState(0); // [PHASE 3]
     const countRef = useRef(null);
+    const xpCountRef = useRef(null); // [PHASE 3]
     const particles = useParticles(phase === 'counting' || phase === 'holding', 40);
 
     const startExit = useCallback(() => {
@@ -66,16 +68,33 @@ export default function RewardPopup({ reward, onClose }) {
                     // PHASE 3: Hold
                     setPhase('holding');
                     // Auto-dismiss after 3s
-                    setTimeout(startExit, 3000);
+                    setTimeout(startExit, 4000);
                 } else {
                     setDisplayAmount(Math.floor(current));
                 }
             }, 40);
+
+            // [PHASE 3] Count up XP
+            if (reward.xpGain) {
+                const xpTarget = reward.xpGain;
+                const xpStep = xpTarget / steps;
+                let xpCurrent = 0;
+                xpCountRef.current = setInterval(() => {
+                    xpCurrent += xpStep;
+                    if (xpCurrent >= xpTarget) {
+                        setDisplayXP(xpTarget);
+                        clearInterval(xpCountRef.current);
+                    } else {
+                        setDisplayXP(Math.floor(xpCurrent));
+                    }
+                }, 40);
+            }
         }, 400);
 
         return () => {
             clearTimeout(enterTimer);
             if (countRef.current) clearInterval(countRef.current);
+            if (xpCountRef.current) clearInterval(xpCountRef.current);
         };
     }, [reward, startExit]);
 
@@ -129,6 +148,14 @@ export default function RewardPopup({ reward, onClose }) {
                     <div className="coin-icon" style={{ background: `linear-gradient(135deg, ${colors.primary}, ${colors.secondary})` }}>Z</div>
                     <span className="reward-value" style={{ color: colors.primary }}>+{displayAmount.toLocaleString()}</span>
                 </div>
+
+                {/* [PHASE 3] XP Gain */}
+                {reward?.xpGain > 0 && (
+                    <div className="xp-gain-row">
+                        <span className="xp-label">XP</span>
+                        <span className="xp-value">+{displayXP.toLocaleString()}</span>
+                    </div>
+                )}
 
                 {/* Tier badge */}
                 <div className="tier-badge" style={{ color: colors.primary, borderColor: colors.primary }}>
@@ -239,6 +266,32 @@ export default function RewardPopup({ reward, onClose }) {
                     font-weight: 900;
                     text-shadow: 0 0 30px var(--glow-color);
                     letter-spacing: -2px;
+                }
+
+                /* [PHASE 3] XP GAIN */
+                .xp-gain-row {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 12px;
+                    margin-bottom: 24px;
+                    background: rgba(0, 212, 255, 0.1);
+                    padding: 8px 20px;
+                    border-radius: 12px;
+                    border: 1px solid rgba(0, 212, 255, 0.2);
+                    width: fit-content;
+                    margin-inline: auto;
+                }
+                .xp-label {
+                    font-size: 0.8rem;
+                    font-weight: 900;
+                    color: #00d4ff;
+                    letter-spacing: 2px;
+                }
+                .xp-value {
+                    font-size: 1.2rem;
+                    font-weight: 800;
+                    color: #fff;
                 }
 
                 /* TIER BADGE */

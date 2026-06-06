@@ -1,14 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import {
-    onAuthStateChanged,
-    signInWithPopup,
-    signInWithEmailAndPassword,
-    createUserWithEmailAndPassword,
-    signOut
-} from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, increment, arrayUnion } from 'firebase/firestore';
-import { auth, googleProvider, db } from '../firebase';
 import { XP_WIN_BONUS, XP_KNOCKOUT, XP_STOMP } from '../utils/leveling';
+import { createPuckInstance } from '../utils/puckLeveling';
+import { socket } from '../services/socket';
+import { CONFIG } from '../utils/config';
 
 const AuthContext = createContext();
 
@@ -16,10 +10,16 @@ export function useAuth() {
     return useContext(AuthContext);
 }
 
+// Custom stubs to mirror Firebase SDK functions natively
+export const increment = (value) => ({ _type: 'increment', value });
+export const arrayUnion = (value) => ({ _type: 'arrayUnion', value });
+export const arrayRemove = (value) => ({ _type: 'arrayRemove', value });
+
 // Default inventory structure
 const DEFAULT_INVENTORY = {
     icons: [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010], // Users start with all standard colors
     username: null, // [NEW] Added username field
+    following: [], // [NEW] Followed user UIDs
     equippedIcon: 1001, // Default to Red
     skins: [],
     equippedSkin: null,
@@ -46,6 +46,12 @@ const DEFAULT_INVENTORY = {
         highestCombo: 0
     },
     achievements: [],
+    claimedSeasonRewards: [], // [NEW] Track claimed season pass levels
+    isPro: false, // [NEW] PuckOff Pro Status
+    proExpiry: null, // [NEW] Subscription expiry date
+    lastProReward: 0, // [NEW] Timestamp of last weekly reward claim
+    isLegacy: false, // [NEW] Legacy alpha/beta tester flag
+    pucks: [], // [PHASE 3] Persistent Puck Instances
     lastLogin: null,
     createdAt: null
 };
@@ -57,6 +63,8 @@ export function AuthProvider({ children }) {
     const [inventory, setInventory] = useState(DEFAULT_INVENTORY);
     const [isAdmin, setIsAdmin] = useState(false);
     const [currentWager, setCurrentWager] = useState(0); // [NEW] Wager State
+    const [notifications, setNotifications] = useState([]); // [NEW] Notification state
+    const migrationAttempted = React.useRef(false); // [PHASE 3] Prevent double migration
 
     const clearError = useCallback(() => setError(null), []);
 
@@ -72,78 +80,120 @@ export function AuthProvider({ children }) {
             }
         }, 6000);
 
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        const checkAuthToken = async () => {
+            const token = localStorage.getItem('pba_jwt_token');
+            if (!token) {
+                if (mounted) {
+                    setUser(null);
+                    setInventory(DEFAULT_INVENTORY);
+                    setIsAdmin(false);
+                    setLoading(false);
+                    clearTimeout(safetyTimer);
+                }
+                return;
+            }
+
             try {
-                if (firebaseUser) {
-                    setUser(firebaseUser);
-                    // Wrap data load in a race with a 4s timeout
-                    await Promise.race([
-                        loadUserData(firebaseUser.uid),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore Timeout")), 4000))
-                    ]);
+                const res = await fetch(`${CONFIG.SERVER_URL}/api/auth/me`, {
+                    method: 'GET',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                if (!mounted) return;
+
+                if (res.ok && data.success) {
+                    setUser(data.user);
+                    setInventory({
+                        ...DEFAULT_INVENTORY,
+                        ...data.user
+                    });
+                    setIsAdmin(data.user.is_admin === 1);
+
+                    // Setup real-time listeners over Socket.io
+                    socket.auth = { token };
+                    socket.connect();
+                    socket.emit('registerPresence', { uid: data.user.uid, email: data.user.email });
+
+                    const handleInventoryUpdate = (updates) => {
+                        setInventory(prev => ({
+                            ...prev,
+                            ...updates
+                        }));
+                    };
+
+                    const handleNotificationUpdate = (notifyList) => {
+                        setNotifications(notifyList);
+                    };
+
+                    const handlePucksUpdate = (puckList) => {
+                        setInventory(prev => ({
+                            ...prev,
+                            pucks: puckList
+                        }));
+                    };
+
+                    socket.on('inventoryUpdate', handleInventoryUpdate);
+                    socket.on('notificationUpdate', handleNotificationUpdate);
+                    socket.on('pucksUpdate', handlePucksUpdate);
+
+                    // Clean up socket listeners
+                    return () => {
+                        socket.off('inventoryUpdate', handleInventoryUpdate);
+                        socket.off('notificationUpdate', handleNotificationUpdate);
+                        socket.off('pucksUpdate', handlePucksUpdate);
+                    };
                 } else {
+                    localStorage.removeItem('pba_jwt_token');
                     setUser(null);
                     setInventory(DEFAULT_INVENTORY);
                     setIsAdmin(false);
                 }
             } catch (err) {
-                console.error("Auth state change error:", err);
-                if (mounted) setError("Loading profile took too long. Some features may be unavailable.");
+                console.error("Auth start check error:", err);
+                if (mounted) {
+                    setError("Failed to load profile. Running in offline/guest mode.");
+                }
+            } finally {
+                if (mounted) {
+                    setLoading(false);
+                    clearTimeout(safetyTimer);
+                }
             }
+        };
 
-            // Clear the safety timer since we finished normally
-            clearTimeout(safetyTimer);
-            if (mounted) setLoading(false);
+        let cleanupSocket = null;
+        checkAuthToken().then(cleanup => {
+            cleanupSocket = cleanup;
         });
 
         return () => {
             mounted = false;
             clearTimeout(safetyTimer);
-            unsubscribe();
+            if (cleanupSocket) cleanupSocket();
         };
     }, []);
 
-    // Load user data from Firestore
-    async function loadUserData(uid) {
-        try {
-            setError(null);
-            const userDoc = await getDoc(doc(db, 'users', uid));
-            if (userDoc.exists()) {
-                const data = userDoc.data();
-                setInventory({
-                    ...DEFAULT_INVENTORY,
-                    ...data,
-                    stats: { ...DEFAULT_INVENTORY.stats, ...data.stats }
-                });
-                setIsAdmin(data.isAdmin || false);
-
-                // Update last login
-                await updateDoc(doc(db, 'users', uid), {
-                    lastLogin: new Date().toISOString()
-                });
-            } else {
-                // Create new user document
-                const newUserData = {
-                    ...DEFAULT_INVENTORY,
-                    email: auth.currentUser?.email,
-                    createdAt: new Date().toISOString(),
-                    lastLogin: new Date().toISOString(),
-                    isAdmin: false
-                };
-                await setDoc(doc(db, 'users', uid), newUserData);
-                setInventory(newUserData);
-            }
-        } catch (error) {
-            console.error('Error loading user data:', error);
-            setError("Failed to load profile. Please check your connection.");
-        }
-    }
+    // Load user data is now handled by real-time onSnapshot in useEffect
 
     // Save inventory to Firestore
+    // Save inventory to SQLite via backend REST endpoint
     const saveInventory = useCallback(async (updates) => {
         if (!user) return;
         try {
-            await updateDoc(doc(db, 'users', user.uid), updates);
+            const token = localStorage.getItem('pba_jwt_token');
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/user/saveInventory`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ updates })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'Failed to save inventory');
+            }
+            // Updates will be merged locally
             setInventory(prev => ({ ...prev, ...updates }));
         } catch (error) {
             console.error('Error saving inventory:', error);
@@ -154,23 +204,33 @@ export function AuthProvider({ children }) {
     // ========== AUTH METHODS ==========
 
     async function loginWithGoogle() {
-        try {
-            setError(null);
-            await signInWithPopup(auth, googleProvider);
-        } catch (error) {
-            console.error('Google login error:', error);
-            setError("Google login failed. Please try again.");
-            throw error;
-        }
+        console.warn("Google login is not supported on local SQLite database.");
+        setError("Google Sign-In is currently disabled. Please use email and password.");
     }
 
     async function loginWithEmail(email, password) {
         try {
             setError(null);
-            await signInWithEmailAndPassword(auth, email, password);
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'Login failed');
+            }
+            
+            localStorage.setItem('pba_jwt_token', data.token);
+            setUser(data.user);
+            setInventory({
+                ...DEFAULT_INVENTORY,
+                ...data.user
+            });
+            setIsAdmin(data.user.is_admin === 1);
         } catch (error) {
             console.error('Email login error:', error);
-            setError("Login failed. Check your email and password.");
+            setError(error.message || "Login failed. Check your email and password.");
             throw error;
         }
     }
@@ -178,10 +238,26 @@ export function AuthProvider({ children }) {
     async function signupWithEmail(email, password) {
         try {
             setError(null);
-            await createUserWithEmailAndPassword(auth, email, password);
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/auth/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password, username: email.split('@')[0] })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'Registration failed');
+            }
+            
+            localStorage.setItem('pba_jwt_token', data.token);
+            setUser(data.user);
+            setInventory({
+                ...DEFAULT_INVENTORY,
+                ...data.user
+            });
+            setIsAdmin(false);
         } catch (error) {
             console.error('Signup error:', error);
-            setError("Failed to create account. Email might be in use.");
+            setError(error.message || "Failed to create account. Email might be in use.");
             throw error;
         }
     }
@@ -189,7 +265,11 @@ export function AuthProvider({ children }) {
     async function logout() {
         try {
             setError(null);
-            await signOut(auth);
+            localStorage.removeItem('pba_jwt_token');
+            socket.disconnect();
+            setUser(null);
+            setInventory(DEFAULT_INVENTORY);
+            setIsAdmin(false);
         } catch (error) {
             console.error('Logout error:', error);
             setError("Logout failed.");
@@ -210,34 +290,65 @@ export function AuthProvider({ children }) {
         await saveInventory({ equippedIcon: iconId });
     }, [user, saveInventory]);
 
+    // [PHASE 3] Equip a specific Puck Instance
+    const equipPuck = useCallback(async (puckId) => {
+        if (!user) return;
+        const puck = inventory.pucks.find(p => p.id === puckId);
+        if (!puck) return;
+        
+        await saveInventory({ 
+            equippedIcon: puck.iconId,
+            equipped_puck_id: puckId // [NEW] Track the persistent ID
+        });
+        localStorage.setItem('equipped_puck_id', puckId);
+        localStorage.setItem('equipped_skin', puck.iconId);
+        localStorage.setItem('equipped_skin_tier', puck.tier);
+    }, [user, inventory.pucks, saveInventory]);
+
     // ========== ECONOMY MANAGEMENT ==========
 
     const addZoins = useCallback(async (amount) => {
         if (!user) return;
-        try {
-            await updateDoc(doc(db, 'users', user.uid), {
-                zoins: increment(amount)
-            });
-            setInventory(prev => ({ ...prev, zoins: (prev.zoins || 0) + amount }));
-        } catch (error) {
-            console.error('Error adding Zoins:', error);
-        }
-    }, [user]);
+        await saveInventory({ zoins: increment(amount) });
+    }, [user, saveInventory]);
 
     const spendZoins = useCallback(async (amount) => {
         if (!user || (inventory.zoins || 0) < amount) return false;
         try {
-            await updateDoc(doc(db, 'users', user.uid), {
-                zoins: increment(-amount)
-            });
-            setInventory(prev => ({ ...prev, zoins: (prev.zoins || 0) - amount }));
+            await saveInventory({ zoins: increment(-amount) });
             return true;
         } catch (error) {
             console.error('Error spending Zoins:', error);
-            setError("Transaction failed. Zoins not deducted.");
             return false;
         }
-    }, [user, inventory.zoins]);
+    }, [user, inventory.zoins, saveInventory]);
+
+    // [PHASE 3] Update specific Puck Stats via SQLite
+    const updatePuckStats = useCallback(async (puckId, updates) => {
+        if (!user) return;
+        try {
+            const token = localStorage.getItem('pba_jwt_token');
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/user/pucks/update`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ puckId, updates })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'Failed to update puck stats');
+            }
+            // Update local puck state
+            setInventory(prev => ({
+                ...prev,
+                pucks: prev.pucks.map(p => p.id === puckId ? { ...p, ...updates } : p)
+            }));
+        } catch (error) {
+            console.error('Error updating puck stats:', error);
+        }
+    }, [user]);
 
     const joinWagerMatch = useCallback(async (amount) => {
         if (!user || (inventory.zoins || 0) < amount) return false;
@@ -251,7 +362,6 @@ export function AuthProvider({ children }) {
     }, [user, inventory.zoins, spendZoins]);
 
     const applyPenalty = useCallback(async (penaltyType) => {
-        // ... (no change needed for logic, but error handling)
         if (!user) return;
 
         let updates = {};
@@ -273,32 +383,23 @@ export function AuthProvider({ children }) {
         }
 
         try {
-            await updateDoc(doc(db, 'users', user.uid), updates);
-            setInventory(prev => ({
-                ...prev,
-                credits: Math.max(0, (prev.credits || 0) - 1),
-                consecutiveQuits: (prev.consecutiveQuits || 0) + 1,
-                ...((updates.banUntil) ? { banUntil: updates.banUntil } : {})
-            }));
+            await saveInventory(updates);
         } catch (error) {
             console.error('Error applying penalty:', error);
         }
-    }, [user, inventory.credits, inventory.consecutiveQuits]);
+    }, [user, inventory.credits, inventory.consecutiveQuits, saveInventory]);
 
     const useFreePack = useCallback(async () => {
         if (!user || inventory.freePacks < 1) return false;
         try {
-            await updateDoc(doc(db, 'users', user.uid), {
-                freePacks: increment(-1)
-            });
-            setInventory(prev => ({ ...prev, freePacks: prev.freePacks - 1 }));
+            await saveInventory({ freePacks: increment(-1) });
             return true;
         } catch (error) {
             console.error('Error using free pack:', error);
             setError("Failed to open pack. Please try again.");
             return false;
         }
-    }, [user, inventory.freePacks]);
+    }, [user, inventory.freePacks, saveInventory]);
 
     // ========== LOADOUT MANAGEMENT ==========
 
@@ -344,8 +445,8 @@ export function AuthProvider({ children }) {
 
             const totalZoinsEarned = participationReward + winReward + killReward + wagerWinnings;
 
-            // Perform single atomic update for Stats + Zoins + XP
-            await updateDoc(doc(db, 'users', user.uid), {
+            // Perform single atomic update for Stats + Zoins + XP via SQLite
+            await saveInventory({
                 'stats.gamesPlayed': increment(1),
                 'stats.wins': increment(won ? 1 : 0),
                 'stats.knockouts': increment(knockouts || 0),
@@ -358,22 +459,6 @@ export function AuthProvider({ children }) {
                 xp: increment(xpEarned)
             });
 
-            setInventory(prev => ({
-                ...prev,
-                zoins: (prev.zoins || 0) + totalZoinsEarned,
-                consecutiveQuits: 0,
-                xp: (prev.xp || 0) + xpEarned,
-                stats: {
-                    ...prev.stats,
-                    gamesPlayed: prev.stats.gamesPlayed + 1,
-                    wins: prev.stats.wins + (won ? 1 : 0),
-                    knockouts: prev.stats.knockouts + (knockouts || 0),
-                    damageDealt: prev.stats.damageDealt + Math.floor(damageDealt || 0),
-                    stomps: prev.stats.stomps + (stomps || 0),
-                    highestCombo: Math.max(prev.stats.highestCombo, maxCombo || 0)
-                }
-            }));
-
             // Reset Wager
             if (currentWager > 0) setCurrentWager(0);
 
@@ -382,21 +467,14 @@ export function AuthProvider({ children }) {
             console.error('Error updating match stats:', error);
             return null;
         }
-    }, [user, inventory.stats.highestCombo, currentWager]); // Added currentWager dependency
+    }, [user, inventory.stats.highestCombo, currentWager, saveInventory]);
 
     // ========== XP & PROGRESSION ==========
 
     const addXp = useCallback(async (amount) => {
         if (!user || amount <= 0) return;
-        try {
-            await updateDoc(doc(db, 'users', user.uid), {
-                xp: increment(amount)
-            });
-            setInventory(prev => ({ ...prev, xp: (prev.xp || 0) + amount }));
-        } catch (error) {
-            console.error('Error adding XP:', error);
-        }
-    }, [user]);
+        await saveInventory({ xp: increment(amount) });
+    }, [user, saveInventory]);
 
     // Update time played every minute if user is active (simple implementation)
     useEffect(() => {
@@ -408,76 +486,206 @@ export function AuthProvider({ children }) {
             try {
                 // Add 1 minute to timePlayed and appropriate XP
                 const xpAmount = 100; // 100 XP per minute
-                await updateDoc(doc(db, 'users', user.uid), {
+                await saveInventory({
                     timePlayed: increment(1),
                     xp: increment(xpAmount)
                 });
-                setInventory(prev => ({
-                    ...prev,
-                    timePlayed: (prev.timePlayed || 0) + 1,
-                    xp: (prev.xp || 0) + xpAmount
-                }));
             } catch (err) {
                 console.error("Error updating playtime:", err);
             }
         }, 60000); // Every 60 seconds
 
         return () => clearInterval(interval);
-    }, [user]);
+    }, [user, saveInventory]);
 
     // ========== BAN MANAGEMENT ==========
     const removeBan = useCallback(async () => {
         if (!user || (inventory.zoins || 0) < 75) return false;
         try {
-            await updateDoc(doc(db, 'users', user.uid), {
+            await saveInventory({
                 zoins: increment(-75),
                 banUntil: null,
                 consecutiveQuits: 0
             });
-            setInventory(prev => ({
-                ...prev,
-                zoins: (prev.zoins || 0) - 75,
-                banUntil: null,
-                consecutiveQuits: 0
-            }));
             return true;
         } catch (error) {
             console.error('Error removing ban:', error);
             return false;
         }
-    }, [user, inventory.zoins]);
+    }, [user, inventory.zoins, saveInventory]);
 
     // ========== ACHIEVEMENTS ==========
 
     const unlockAchievement = useCallback(async (achievementId) => {
         if (!user || inventory.achievements.includes(achievementId)) return false;
         try {
-            await updateDoc(doc(db, 'users', user.uid), {
-                achievements: arrayUnion(achievementId)
-            });
-            setInventory(prev => ({
-                ...prev,
-                achievements: [...prev.achievements, achievementId]
-            }));
+            await saveInventory({ achievements: arrayUnion(achievementId) });
             return true;
         } catch (error) {
             console.error('Error unlocking achievement:', error);
             return false;
         }
-    }, [user, inventory.achievements]);
+    }, [user, inventory.achievements, saveInventory]);
+
+    // ========== SEASON PASS ==========
+
+    const claimSeasonReward = useCallback(async (level, rewardType, amount) => {
+        if (!user || inventory.claimedSeasonRewards?.includes(level)) return false;
+
+        const updates = {
+            claimedSeasonRewards: arrayUnion(level)
+        };
+
+        if (rewardType === 'zoin') {
+            updates.zoins = increment(amount);
+        } else if (rewardType === 'skin') {
+            updates.skins = arrayUnion(amount);
+        } // Add more reward types like 'icon' if needed
+
+        try {
+            await saveInventory(updates);
+            return true;
+        } catch (err) {
+            console.error('Error claiming season reward:', err);
+            return false;
+        }
+    }, [user, inventory.claimedSeasonRewards, saveInventory]);
+
+    // ========== SOCIAL FUNCTIONS ==========
+
+    const followUser = useCallback(async (targetUid) => {
+        if (!user || user.uid === targetUid) return false;
+        try {
+            await saveInventory({ following: arrayUnion(targetUid) });
+            return true;
+        } catch (error) {
+            console.error('Error following user:', error);
+            return false;
+        }
+    }, [user, saveInventory]);
+
+    const unfollowUser = useCallback(async (targetUid) => {
+        if (!user) return false;
+        try {
+            await saveInventory({ following: arrayRemove(targetUid) });
+            return true;
+        } catch (error) {
+            console.error('Error unfollowing user:', error);
+            return false;
+        }
+    }, [user, saveInventory]);
+
+    const fetchPublicProfile = useCallback(async (uid) => {
+        if (!uid) return null;
+        try {
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/user/profile/${uid}`);
+            const data = await res.json();
+            if (res.ok && data.success) {
+                return data.profile;
+            }
+            return null;
+        } catch (error) {
+            console.error('Error fetching public profile:', error);
+            return null;
+        }
+    }, []);
+
+    // ========== NOTIFICATION MANAGEMENT ==========
+
+    const sendNotification = useCallback(async (targetUid, type, data) => {
+        if (!user) return false;
+        try {
+            const token = localStorage.getItem('pba_jwt_token');
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/user/notifications/send`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ targetUid, type, data })
+            });
+            const resData = await res.json();
+            return res.ok && resData.success;
+        } catch (error) {
+            console.error('Error sending notification:', error);
+            return false;
+        }
+    }, [user]);
+
+    const markNotificationRead = useCallback(async (notificationId) => {
+        if (!user) return;
+        try {
+            const token = localStorage.getItem('pba_jwt_token');
+            await fetch(`${CONFIG.SERVER_URL}/api/user/notifications/read`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ notificationId })
+            });
+        } catch (error) {
+            console.error('Error marking notification read:', error);
+        }
+    }, [user]);
+
+    const deleteNotification = useCallback(async (notificationId) => {
+        if (!user) return;
+        try {
+            const token = localStorage.getItem('pba_jwt_token');
+            await fetch(`${CONFIG.SERVER_URL}/api/user/notifications/delete`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ notificationId })
+            });
+        } catch (error) {
+            console.error('Error deleting notification:', error);
+        }
+    }, [user]);
+
+    const clearNotifications = useCallback(async () => {
+        if (!user || notifications.length === 0) return;
+        try {
+            const token = localStorage.getItem('pba_jwt_token');
+            await fetch(`${CONFIG.SERVER_URL}/api/user/notifications/clear`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+        } catch (error) {
+            console.error('Error clearing notifications:', error);
+        }
+    }, [user, notifications]);
 
     // ========== ADMIN FUNCTIONS ==========
 
     const resetInventory = useCallback(async () => {
         if (!user) return;
-        const resetData = {
-            ...DEFAULT_INVENTORY,
-            email: user.email,
-            createdAt: inventory.createdAt,
-            lastLogin: new Date().toISOString()
-        };
-        await setDoc(doc(db, 'users', user.uid), resetData);
-        setInventory(resetData);
+        try {
+            const token = localStorage.getItem('pba_jwt_token');
+            const res = await fetch(`${CONFIG.SERVER_URL}/api/user/resetInventory`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            const resData = await res.json();
+            if (res.ok && resData.success) {
+                setInventory({
+                    ...DEFAULT_INVENTORY,
+                    email: user.email,
+                    createdAt: inventory.createdAt
+                });
+            }
+        } catch (error) {
+            console.error('Error resetting inventory:', error);
+        }
     }, [user, inventory.createdAt]);
 
     const resetIcons = useCallback(async () => {
@@ -505,6 +713,10 @@ export function AuthProvider({ children }) {
         equipIcon,
         resetIcons,
 
+        // Pucks
+        equipPuck,
+        updatePuckStats,
+
         // Economy
         addZoins,
         spendZoins,
@@ -523,6 +735,19 @@ export function AuthProvider({ children }) {
 
         // Progression
         addXp,
+        claimSeasonReward,
+
+        // Social
+        followUser,
+        unfollowUser,
+        fetchPublicProfile,
+
+        // Notifications
+        notifications,
+        sendNotification,
+        markNotificationRead,
+        deleteNotification,
+        clearNotifications,
 
         // Admin
         resetInventory,

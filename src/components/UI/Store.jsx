@@ -36,7 +36,7 @@ function RollingCounter({ value }) {
     return <span>{displayValue.toLocaleString()}</span>;
 }
 
-export default function Store({ onClose, onOpenPack }) {
+export default function Store({ onClose, onOpenPack, dailyShop, purchaseShopItem }) {
     const { user, inventory, loading, spendZoins, isAdmin } = useAuth();
     const stats = getCollectionStats(inventory?.icons || []);
 
@@ -51,6 +51,8 @@ export default function Store({ onClose, onOpenPack }) {
 
     // Zoin Theme State
     const [zoinTheme, setZoinTheme] = useState('STANDARD');
+    const [purchasingId, setPurchasingId] = useState(null);
+    const [purchaseError, setPurchaseError] = useState(null);
 
     const handleOpenPack = async () => {
         if (!user || isOpening) return;
@@ -70,6 +72,23 @@ export default function Store({ onClose, onOpenPack }) {
             onOpenPack(bet.cost);
         }
         setIsOpening(false);
+    };
+
+    const handleDailyPurchase = async (itemId) => {
+        if (!user || purchasingId) return;
+        setPurchasingId(itemId);
+        setPurchaseError(null);
+        audio.playClick();
+
+        const result = await purchaseShopItem(itemId);
+        if (result.success) {
+            // Success is handled by Firestore real-time sync in AuthContext
+            setPurchasingId(null);
+        } else {
+            setPurchaseError(result.error);
+            setPurchasingId(null);
+            setTimeout(() => setPurchaseError(null), 3000);
+        }
     };
 
     return (
@@ -118,6 +137,41 @@ export default function Store({ onClose, onOpenPack }) {
             </div>
 
             <div className="store-content">
+                {/* 0. DAILY DEALS SECTION [NEW] */}
+                <div className="featured-section">
+                    <div className="section-header">
+                        <h3>⚡ DAILY DEALS</h3>
+                        <div className="timer-badge">RESETS IN: {Math.max(0, Math.floor((24 * 60 * 60 * 1000 - (Date.now() - (dailyShop?.lastRotation || 0))) / (60 * 60 * 1000)))}h</div>
+                    </div>
+                    
+                    <div className="featured-grid">
+                        {(dailyShop?.items || []).map(item => {
+                            const isOwned = (inventory?.icons || []).some(icon => icon.id === item.id || icon === item.id);
+                            return (
+                                <div key={item.id} className={`featured-card tier-${item.tier} ${isOwned ? 'owned' : ''}`}>
+                                    <div className="featured-tag">LIMITED TIME</div>
+                                    <div className="featured-icon-img">
+                                        <img src={item.imageUrl} alt={item.name} onError={(e) => e.target.src = '/icons/placeholder.png'} />
+                                    </div>
+                                    <div className="featured-info">
+                                        <div className="item-name">{item.name}</div>
+                                        <div className="item-tier">{TIERS[item.tier]?.name || 'UNKNOWN'}</div>
+                                    </div>
+                                    
+                                    <button 
+                                        className={`btn-purchase ${isOwned ? 'owned' : ''}`}
+                                        disabled={isOwned || (inventory?.zoins || 0) < item.cost || purchasingId === item.id}
+                                        onClick={() => handleDailyPurchase(item.id)}
+                                    >
+                                        {isOwned ? 'OWNED' : (purchasingId === item.id ? '...' : `${item.cost} Z`)}
+                                    </button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {purchaseError && <div className="purchase-error">⚠️ {purchaseError}</div>}
+                </div>
+
                 {/* 1. HIGH ROLLER BETTING SECTION */}
                 {/* 1. PACK OPENING SECTION (Refactored) */}
                 <div className="pack-opener-section">
@@ -284,6 +338,67 @@ export default function Store({ onClose, onOpenPack }) {
                     overflow-y: auto;
                     border: 1px solid rgba(255, 255, 255, 0.1);
                 }
+
+                .featured-section {
+                    margin-bottom: 3rem;
+                    background: rgba(255, 255, 255, 0.03);
+                    border-radius: 20px;
+                    padding: 1.5rem;
+                    border: 1px solid rgba(255, 255, 255, 0.05);
+                }
+                .section-header {
+                    display: flex; justify-content: space-between; align-items: center;
+                    margin-bottom: 1.5rem;
+                }
+                .section-header h3 { margin: 0; color: #00ff87; font-size: 1.2rem; }
+                .timer-badge {
+                    background: rgba(255, 68, 68, 0.1); border: 1px solid #ff4444;
+                    color: #ff4444; padding: 0.2rem 0.6rem; border-radius: 10px;
+                    font-size: 0.7rem; font-weight: bold;
+                }
+                .featured-grid {
+                    display: flex; gap: 1.5rem; justify-content: center; flex-wrap: wrap;
+                }
+                .featured-card {
+                    width: 180px; background: rgba(0,0,0,0.4);
+                    border-radius: 15px; border: 1px solid rgba(255,255,255,0.1);
+                    padding: 1rem; position: relative; transition: transform 0.2s;
+                    display: flex; flex-direction: column; align-items: center;
+                }
+                .featured-card:hover:not(.owned) { transform: translateY(-5px); border-color: rgba(255,255,255,0.3); }
+                .featured-card.owned { opacity: 0.6; grayscale: 0.8; }
+                
+                .featured-tag {
+                    position: absolute; top: 10px; left: 10px;
+                    background: #ff006e; color: white; font-size: 0.5rem;
+                    padding: 0.2rem 0.4rem; border-radius: 4px; font-weight: 900;
+                }
+                .featured-icon-img {
+                    width: 80px; height: 80px; margin: 1rem 0;
+                }
+                .featured-icon-img img { width: 100%; height: 100%; object-fit: contain; }
+                
+                .featured-info { text-align: center; margin-bottom: 1rem; }
+                .item-name { font-size: 0.9rem; font-weight: bold; margin-bottom: 0.2rem; }
+                .item-tier { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
+
+                .btn-purchase {
+                    width: 100%; padding: 0.6rem; border-radius: 10px;
+                    border: none; background: #00ff87; color: black;
+                    font-weight: 900; cursor: pointer; transition: all 0.2s;
+                }
+                .btn-purchase:hover:not(.owned):not(:disabled) { background: #00d488; }
+                .btn-purchase:disabled { background: #333; color: #666; cursor: not-allowed; }
+                .btn-purchase.owned { background: #222; color: #555; border: 1px solid #444; }
+
+                .purchase-error {
+                    color: #ff4444; text-align: center; margin-top: 1rem; font-size: 0.8rem;
+                }
+
+                .featured-card.tier-2 { border-color: rgba(0, 212, 255, 0.3); }
+                .featured-card.tier-3 { border-color: rgba(139, 92, 246, 0.4); }
+                .featured-card.tier-4 { border-color: rgba(255, 215, 0, 0.5); }
+                
                 .store-header {
                     display: flex; justify-content: space-between; align-items: center;
                     margin-bottom: 2rem; border-bottom: 1px solid rgba(255,255,255,0.1);

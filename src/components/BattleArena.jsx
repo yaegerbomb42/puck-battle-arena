@@ -18,13 +18,13 @@ import ReplayPlayer from './ReplaySystem';
 import { useReplayRecorder } from './ReplaySystem';
 
 import Lobby from './UI/Lobby';
-import { VictoryScreen } from './UI/GameHUD';
 import GameHUD from './UI/GameHUD';
 import SandboxControls from './UI/SandboxControls';
 import MaintenanceOverlay from './UI/MaintenanceOverlay';
 import ControllerHints from './UI/ControllerHints';
 import LoadingScreen from './UI/LoadingScreen';
 import SettingsMenu from './UI/SettingsMenu';
+import MatchHonors from './UI/MatchHonors'; // [NEW]
 
 import { useMultiplayer } from '../hooks/useMultiplayer';
 import { useAuth } from '../contexts/AuthContext';
@@ -205,8 +205,8 @@ function GameScene({
 // MAIN BATTLE ARENA COMPONENT
 // ============================================
 export default function BattleArena({ forceOffline }) {
-    const multiplayer = useMultiplayer();
     const { user, updateMatchStats, isAdmin } = useAuth() || {};
+    const multiplayer = useMultiplayer(user?.email);
 
     // [NEW] Force Offline Mode from App.js (Auth Wall)
     useEffect(() => {
@@ -892,21 +892,23 @@ export default function BattleArena({ forceOffline }) {
                     onPlayOffline={multiplayer.enableOfflineMode}
                     onTestMaintenance={multiplayer.triggerTestMaintenance}
                     onShowSettings={() => setShowSettings(true)}
+                    fetchLeaderboard={multiplayer.fetchLeaderboard}
+                    quests={multiplayer.quests}
+                    fetchQuests={multiplayer.fetchQuests}
                 />
             );
         }
 
         if (multiplayer.gameState === 'ended') {
-            const winnerId = multiplayer.winner || Object.entries(playerScores)
-                .sort(([, a], [, b]) => b - a)[0]?.[0];
-
             return (
-                <VictoryScreen
-                    winner={winnerId === multiplayer.playerId ? 'You' : 'Opponent'}
-                    scores={hudScores}
-                    stats={matchStats}
-                    onRestart={() => multiplayer.requestRematch?.()}
-                    onMenu={multiplayer.leaveRoom}
+                <MatchHonors 
+                    honors={multiplayer.honors}
+                    isWinner={multiplayer.winner === multiplayer.playerId}
+                    onRestart={() => {
+                        audio.playClick();
+                        multiplayer.setHonors(null);
+                        multiplayer.leaveRoom();
+                    }}
                 />
             );
         }
@@ -1087,6 +1089,15 @@ export default function BattleArena({ forceOffline }) {
                     <h1 className={startCountdown === 'GO!' ? 'go-text' : 'number-text'}>
                         {startCountdown}
                     </h1>
+                    {multiplayer.wagerAmount > 0 && startCountdown !== 'GO!' && (
+                        <div className="prize-pool-container">
+                            <div className="prize-pool-label">TOTAL PRIZE POOL</div>
+                            <div className="prize-pool-value">{multiplayer.wagerAmount * multiplayer.players.length} Z</div>
+                            {multiplayer.wagerAmount >= 500 && (
+                                <div className="high-stakes-warning-banner">⚠️ HIGH STAKES MATCH ⚠️</div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1147,6 +1158,38 @@ export default function BattleArena({ forceOffline }) {
                     background: linear-gradient(135deg, #00ff87, #60efff);
                     -webkit-background-clip: text;
                     -webkit-text-fill-color: transparent;
+                    filter: drop-shadow(0 0 50px rgba(0,255,135,0.8));
+                    animation: go-pop 0.5s ease-out;
+                }
+                .prize-pool-container {
+                    position: absolute;
+                    bottom: 20%;
+                    width: 100%;
+                    text-align: center;
+                    animation: fade-in-up 0.5s ease-out;
+                }
+                .prize-pool-label {
+                    font-size: 1rem;
+                    letter-spacing: 0.3em;
+                    color: rgba(255,255,255,0.6);
+                    font-family: 'Orbitron', sans-serif;
+                }
+                .prize-pool-value {
+                    font-size: 5rem;
+                    font-weight: 900;
+                    color: #ffd700;
+                    text-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
+                    font-family: 'Orbitron', sans-serif;
+                }
+                .high-stakes-warning-banner {
+                    margin-top: 2rem;
+                    font-size: 1.5rem;
+                    font-weight: 900;
+                    color: #ff006e;
+                    text-shadow: 0 0 20px #ff006e;
+                    animation: pulse 1s infinite;
+                    letter-spacing: 0.1em;
+                }
                     text-shadow: 0 0 80px rgba(0,255,135,0.6);
                     animation: go-blast 1s ease-out forwards;
                 }

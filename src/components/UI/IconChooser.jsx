@@ -2,13 +2,19 @@ import React, { useState } from 'react';
 import { TIERS, getAllIcons } from '../../utils/economy';
 import SkeletonLoader from './SkeletonLoader';
 import PuckPreview from './PuckPreview';
+import PuckCard from './PuckCard';
+import { useAuth } from '../../contexts/AuthContext';
 
 // Get all 150 icons from the centralized database
 const ICON_SLOTS = getAllIcons().sort((a, b) => a.id - b.id);
 
-export default function IconChooser({ ownedIcons = [], onClose, onSelect, equippedIcon, loading }) {
+export default function IconChooser({ ownedIcons = [], onClose, onSelect, equippedIcon, isLegacy, loading }) {
+    const { pucks, equipPuck } = useAuth();
     const [hoveredIcon, setHoveredIcon] = useState(null);
     const [selectedPreview, setSelectedPreview] = useState(null);
+    const [view, setView] = useState('stable'); // 'stable' (owned pucks) or 'collection' (all icons)
+
+    const equippedPuckId = localStorage.getItem('equipped_puck_id');
 
     const groupedByTier = {};
     ICON_SLOTS.forEach(icon => {
@@ -62,9 +68,26 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                 {/* Collection Grid */}
                 <div className="collection-panel">
                     <div className="modal-header">
-                        <h2>✨ ICON COLLECTION</h2>
+                        <div className="header-tabs">
+                            <button 
+                                className={`tab-btn ${view === 'stable' ? 'active' : ''}`}
+                                onClick={() => setView('stable')}
+                            >
+                                🏟️ MY STABLE
+                            </button>
+                            <button 
+                                className={`tab-btn ${view === 'collection' ? 'active' : ''}`}
+                                onClick={() => setView('collection')}
+                            >
+                                ✨ COLLECTION
+                            </button>
+                        </div>
                         <p className="collection-progress">
-                            {loading ? <SkeletonLoader width="100px" height="20px" /> : `${totalOwned} / 150 Collected`}
+                            {view === 'collection' ? (
+                                loading ? <SkeletonLoader width="100px" height="20px" /> : `${totalOwned} / 150 Collected`
+                            ) : (
+                                `${pucks?.length || 0} Registered Pucks`
+                            )}
                         </p>
                         <button className="close-btn" onClick={onClose}>✕</button>
                     </div>
@@ -72,28 +95,31 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                     <div className="icon-grid-container">
                         {loading ? (
                             <div className="tier-section">
-                                <div className="tier-header" style={{ borderColor: '#333' }}>
-                                    <SkeletonLoader width="80px" height="24px" style={{ borderRadius: '20px' }} />
-                                    <SkeletonLoader width="40px" height="20px" />
-                                </div>
-                                <div className="tier-icons">
-                                    {Array(10).fill(0).map((_, i) => (
-                                        <SkeletonLoader key={i} width="100%" height="auto" style={{ aspectRatio: '1', borderRadius: '50%' }} variant="circle" />
-                                    ))}
-                                </div>
-                                <div className="tier-header" style={{ borderColor: '#333', marginTop: '2rem' }}>
-                                    <SkeletonLoader width="80px" height="24px" style={{ borderRadius: '20px' }} />
-                                    <SkeletonLoader width="40px" height="20px" />
-                                </div>
-                                <div className="tier-icons">
-                                    {Array(10).fill(0).map((_, i) => (
-                                        <SkeletonLoader key={i} width="100%" height="auto" style={{ aspectRatio: '1', borderRadius: '50%' }} variant="circle" />
-                                    ))}
-                                </div>
+                                {/* ... skeletons ... */}
+                            </div>
+                        ) : view === 'stable' ? (
+                            <div className="puck-stable-grid">
+                                {pucks?.length > 0 ? (
+                                    pucks.map(p => (
+                                        <PuckCard 
+                                            key={p.id} 
+                                            puck={p} 
+                                            isEquipped={equippedPuckId === p.id}
+                                            onSelect={() => {
+                                                equipPuck(p.id);
+                                                if (onSelect) onSelect(ICON_SLOTS.find(i => i.id === p.iconId));
+                                            }}
+                                        />
+                                    ))
+                                ) : (
+                                    <div className="empty-stable">
+                                        <h3>Your stable is empty</h3>
+                                        <p>Collect icons from the shop or packs to register new pucks!</p>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             Object.entries(groupedByTier).map(([tier, icons]) => {
-                                // ... existing rendering logic ...
                                 const tierData = TIERS[tier] || { color: '#555', name: 'Unknown' };
                                 const ownedInTier = icons.filter(i => ownedSet.has(i.id)).length;
 
@@ -108,7 +134,7 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                                         <div className="tier-icons">
                                             {icons.map(icon => {
                                                 const owned = ownedSet.has(icon.id);
-                                                const isEquipped = equippedIcon === icon.id;
+                                                const isEquipped = equippedIcon === icon.id && (view === 'collection');
                                                 const isPreviewable = icon.tier < 8;
                                                 const showIcon = owned || isPreviewable;
 
@@ -124,7 +150,14 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                                                         onMouseEnter={() => showIcon && setHoveredIcon(icon)}
                                                         onMouseLeave={() => setHoveredIcon(null)}
                                                         onClick={() => {
-                                                            if (showIcon) {
+                                                            if (showIcon && owned) {
+                                                                // Find existing puck for this icon if exists
+                                                                const matchingPuck = pucks?.find(p => p.iconId === icon.id);
+                                                                if (matchingPuck) {
+                                                                    equipPuck(matchingPuck.id);
+                                                                }
+                                                                if (onSelect) onSelect(icon);
+                                                            } else if (showIcon) {
                                                                 setSelectedPreview(icon);
                                                             }
                                                         }}
@@ -157,6 +190,7 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                                                                         />
                                                                     )}
                                                                 </div>
+                                                                {isLegacy && owned && <div className="legacy-sash">LEGACY</div>}
                                                                 {isEquipped && <div className="equipped-badge">✓</div>}
                                                                 {!owned && <div className="lock-icon">🔒</div>}
                                                             </>
@@ -197,30 +231,44 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                 }
                 
                 /* HEADER */
-                .modal-header {
-                    padding: 1.5rem; text-align: left;
-                    border-bottom: 1px solid rgba(255,255,255,0.1);
-                    position: relative;
-                    background: rgba(0,0,0,0.2);
+                .header-tabs {
+                    display: flex; gap: 1rem; flex: 1;
                 }
-                .modal-header h2 {
-                    margin: 0; color: #fff; font-size: 1.8rem;
-                    background: linear-gradient(90deg, #fff, #aaa);
-                    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-                    text-transform: uppercase; letter-spacing: 2px;
+                .tab-btn {
+                    background: transparent; border: none;
+                    color: #555; font-family: 'Orbitron', sans-serif;
+                    font-size: 1.1rem; font-weight: 800; cursor: pointer;
+                    padding: 0.5rem 0; position: relative;
+                    transition: all 0.2s;
                 }
-                .collection-progress { 
-                    color: #00ff87; margin-top: 0.5rem; font-size: 0.9rem; font-weight: bold;
-                    text-shadow: 0 0 10px rgba(0, 255, 135, 0.3);
+                .tab-btn.active { color: #fff; }
+                .tab-btn.active::after {
+                    content: ''; position: absolute; bottom: -1rem; left: 0; right: 0;
+                    height: 3px; background: #00ff87; border-radius: 2px;
+                    box-shadow: 0 0 10px #00ff87;
                 }
+                .tab-btn:hover { color: #aaa; }
+                
                 .close-btn {
-                    position: absolute; right: 1.5rem; top: 1.5rem;
                     background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);
                     color: #fff; width: 36px; height: 36px; border-radius: 50%;
                     font-size: 1.2rem; cursor: pointer; display: flex; align-items: center; justify-content: center;
                     transition: all 0.2s;
                 }
                 .close-btn:hover { background: #ff006e; border-color: #ff006e; transform: rotate(90deg); }
+
+                /* NEW STYLES */
+                .puck-stable-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+                    gap: 1.5rem;
+                }
+                .empty-stable {
+                    grid-column: 1 / -1;
+                    padding: 4rem; text-align: center; color: #555;
+                    border: 1px dashed rgba(255,255,255,0.1); border-radius: 16px;
+                }
+                .empty-stable h3 { color: #fff; margin-bottom: 0.5rem; }
 
                 /* PANELS */
                 .preview-panel {
@@ -368,6 +416,18 @@ export default function IconChooser({ ownedIcons = [], onClose, onSelect, equipp
                     background: rgba(0,0,0,0.6);
                     font-size: 1.5rem; color: rgba(255,255,255,0.5);
                     z-index: 2;
+                }
+
+                .legacy-sash {
+                    position: absolute; top: 12px; left: -28px;
+                    background: linear-gradient(90deg, #ff006e, #ff8e00);
+                    color: white; font-size: 0.55rem; font-weight: 900;
+                    padding: 2px 30px; transform: rotate(-45deg);
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+                    z-index: 5; pointer-events: none;
+                    letter-spacing: 1px;
+                    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+                    text-transform: uppercase;
                 }
 
                 .no-preview {

@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../../firebase';
 
 const ADMIN_PASSWORD = 'Zawe1234!';
 
@@ -30,16 +28,20 @@ export default function AdminDashboard({ onClose, onTestMaintenance }) {
     const loadData = async () => {
         setLoading(true);
         try {
-            // Load users from Firestore
-            const usersSnapshot = await getDocs(collection(db, 'users'));
-            const usersList = usersSnapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            setUsers(usersList);
+            const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://localhost:3002';
+            
+            // Load users from SQLite backend
+            try {
+                const usersRes = await fetch(`${serverUrl}/api/admin/users`);
+                if (usersRes.ok) {
+                    const usersData = await usersRes.json();
+                    setUsers(usersData.users || []);
+                }
+            } catch (e) {
+                console.error('Failed to load admin users:', e);
+            }
 
             // Parallel fetch with 3s timeout to prevent "stuck" state
-            const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://localhost:3002';
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 3000);
 
